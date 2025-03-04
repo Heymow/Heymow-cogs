@@ -23,52 +23,66 @@ def normalize_link(link: str) -> str:
 
 class LinkChecker(commands.Cog):
     """
-    This cog checks that posted links are not duplicates.
+    This cog checks that posted links are not duplicates and ensures that each message
+    contains exactly one valid suno track link.
     
-    When a duplicate is found:
+    When a duplicate or an invalid message is found:
       - The message is deleted.
-      - A warning message is sent in English to notify the user.
-      - If the user posts a duplicate 3 times, an additional warning is sent.
-      - A notification is sent to admins in a specific channel.
+      - An explanatory warning message is sent in English.
       
     Additionally, each new link cleans the history by removing links older than one week.
-    
-    Ce cog vérifie que les liens postés ne sont pas des doublons.
-    En cas de doublon, le message est supprimé, un avertissement est envoyé à l'utilisateur,
-    et une notification est envoyée aux admins. De plus, l'historique est nettoyé des liens
-    postés il y a plus d'une semaine.
     """
     
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        # Initialize the configuration for the cog with a unique identifier
         self.config = Config.get_conf(self, identifier=1234567890123)
         default_guild = {
             "posted_links": [],      # List of dictionaries: {"link": <normalized_link>, "timestamp": <time>}
             "duplicate_counts": {}   # Dictionary to count duplicates per user: {user_id: count}
         }
         self.config.register_guild(**default_guild)
-        # Set to store message IDs that have been processed as duplicates
         self.processed_messages = set()
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        # Ignore messages from bots or messages outside a guild (e.g., DMs)
+        # Ignore messages from bots or messages outside a guild
         if message.author.bot or message.guild is None:
             return
 
         # Extract all links from the message using regex
-        links = re.findall(r'https?://\S+', message.content)
-        if not links:
+        all_links = re.findall(r'https?://\S+', message.content)
+        # Filter only suno track links
+        suno_links = [link for link in all_links if link.startswith("https://suno.com/song/")]
+
+        # Check that exactly one suno link is present
+        if len(suno_links) != 1:
+            try:
+                await message.delete()
+            except discord.Forbidden:
+                pass
+            await message.channel.send(
+                f"{message.author.mention}, please post exactly one valid Suno song link per message."
+            )
             return
 
-        # Normalize links: for suno.com/song/ links, extract only the song ID
-        normalized_links = [normalize_link(link) for link in links]
+        # Ensure no additional links are present
+        if len(all_links) > 1:
+            try:
+                await message.delete()
+            except discord.Forbidden:
+                pass
+            await message.channel.send(
+                f"{message.author.mention}, please post only one link, and it must be a valid Suno song link."
+            )
+            return
+
+        # At this point, we have exactly one suno link.
+        normalized_link = normalize_link(suno_links[0])
 
         # Retrieve the list of posted links for this guild from configuration
         posted_links = await self.config.guild(message.guild).posted_links()
         current_time = time.time()
-        
+
         # Clean the history: keep only links that are less than or equal to one week old
         cleaned_links = [
             entry for entry in posted_links
@@ -79,20 +93,18 @@ class LinkChecker(commands.Cog):
             await self.config.guild(message.guild).posted_links.set(cleaned_links)
         posted_links = cleaned_links
 
-        # Check if any normalized link already exists in the posted links history
+        # Check if the normalized link is already in the posted links history
         duplicate_found = any(
-            any(link == entry.get("link") for entry in posted_links)
-            for link in normalized_links
+            normalized_link == entry.get("link") for entry in posted_links
         )
         
         if duplicate_found:
-            # Attempt to delete the message (requires Manage Messages permission)
             try:
                 await message.delete()
             except discord.Forbidden:
                 pass
 
-            # Mark the message as processed to prevent it from being handled by another cog
+            # Mark the message as processed
             self.processed_messages.add(message.id)
 
             # Increment the duplicate count for this user
@@ -103,7 +115,7 @@ class LinkChecker(commands.Cog):
             await self.config.guild(message.guild).duplicate_counts.set(duplicate_counts)
 
             # Send a warning message in English in the channel
-            warning = f"{message.author.mention}, your link is a duplicate. Please refrain from posting duplicate links."
+            warning = f"{message.author.mention}, your song has already been posted. Please refrain from posting duplicate links."
             await message.channel.send(warning)
             if count >= 3:
                 extra_warning = (
@@ -126,12 +138,11 @@ class LinkChecker(commands.Cog):
                     pass
             return
 
-        # If no duplicate is found, add each new normalized link with the current timestamp
-        for link in normalized_links:
-            posted_links.append({
-                "link": link,
-                "timestamp": current_time
-            })
+        # If no duplicate is found, add the new normalized link with current timestamp
+        posted_links.append({
+            "link": normalized_link,
+            "timestamp": current_time
+        })
         await self.config.guild(message.guild).posted_links.set(posted_links)
 
 async def setup(bot: commands.Bot):
