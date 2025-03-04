@@ -1,0 +1,27 @@
+{
+    "author": [
+        "Heymow"
+    ],
+    "description": "Check double song posts.",
+    "disabled": false,
+    "end_user_data_statement": "This cog does not persistently store data or metadata about users.",
+    "hidden": false,
+    "install_msg": "Linkchecker successfully loaded.",
+    "max_bot_version": "0.0.0",
+    "min_bot_version": "3.5.0",
+    "min_python_version": [
+        3,
+        7,
+        2
+    ],
+    "name": "Welcome",
+    "permissions": [],
+    "required_cogs": {},
+    "requirements": [],
+    "short": "Welcome new users to the server",
+    "tags": [
+        "welcome",
+        "utility"
+    ],
+    "type": "COG"
+}
