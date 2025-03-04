@@ -32,20 +32,28 @@ class LinkChecker(commands.Cog):
       - A notification is sent to admins in a specific channel.
       
     Additionally, each new link cleans the history by removing links older than one week.
+    
+    Ce cog vérifie que les liens postés ne sont pas des doublons.
+    En cas de doublon, le message est supprimé, un avertissement est envoyé à l'utilisateur,
+    et une notification est envoyée aux admins. De plus, l'historique est nettoyé des liens
+    postés il y a plus d'une semaine.
     """
     
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        # Initialize the configuration for the cog with a unique identifier
         self.config = Config.get_conf(self, identifier=1234567890123)
         default_guild = {
             "posted_links": [],      # List of dictionaries: {"link": <normalized_link>, "timestamp": <time>}
             "duplicate_counts": {}   # Dictionary to count duplicates per user: {user_id: count}
         }
         self.config.register_guild(**default_guild)
+        # Set to store message IDs that have been processed as duplicates
+        self.processed_messages = set()
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        # Ignore messages from bots or messages outside a guild
+        # Ignore messages from bots or messages outside a guild (e.g., DMs)
         if message.author.bot or message.guild is None:
             return
 
@@ -83,6 +91,9 @@ class LinkChecker(commands.Cog):
                 await message.delete()
             except discord.Forbidden:
                 pass
+
+            # Mark the message as processed to prevent it from being handled by another cog
+            self.processed_messages.add(message.id)
 
             # Increment the duplicate count for this user
             duplicate_counts = await self.config.guild(message.guild).duplicate_counts()
@@ -123,5 +134,5 @@ class LinkChecker(commands.Cog):
             })
         await self.config.guild(message.guild).posted_links.set(posted_links)
 
-def setup(bot: commands.Bot):
-    bot.add_cog(LinkChecker(bot))
+async def setup(bot: commands.Bot):
+    await bot.add_cog(LinkChecker(bot))
