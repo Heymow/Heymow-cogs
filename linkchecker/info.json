@@ -14,11 +14,11 @@
         7,
         2
     ],
-    "name": "Welcome",
+    "name": "Linkchecker",
     "permissions": [],
     "required_cogs": {},
     "requirements": [],
-    "short": "Welcome new users to the server",
+    "short": "Check link doubles",
     "tags": [
         "welcome",
         "utility"
