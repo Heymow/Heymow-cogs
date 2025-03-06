@@ -5,6 +5,9 @@ from redbot.core import commands, Config
 
 ONE_WEEK_SECONDS = 604800  # Number of seconds in one week
 
+# Set of allowed channel IDs (replace with your channel IDs)
+ALLOWED_CHANNEL_IDS = {1306660377211310091, 1322627330929070212}
+
 def normalize_link(link: str) -> str:
     """
     Normalize a link from suno.com/song/ by removing the prefix and
@@ -31,6 +34,8 @@ class LinkChecker(commands.Cog):
       - An explanatory warning message is sent in English.
       
     Additionally, each new link cleans the history by removing links older than one week.
+    
+    Ce cog ne s'exécute que dans les salons spécifiés dans ALLOWED_CHANNEL_IDS.
     """
     
     def __init__(self, bot: commands.Bot):
@@ -49,6 +54,10 @@ class LinkChecker(commands.Cog):
         if message.author.bot or message.guild is None:
             return
 
+        # Process only if the message is in one of the allowed channels
+        if message.channel.id not in ALLOWED_CHANNEL_IDS:
+            return
+
         # Extract all links from the message using regex
         all_links = re.findall(r'https?://\S+', message.content)
         # Filter only suno track links
@@ -61,7 +70,7 @@ class LinkChecker(commands.Cog):
             except discord.Forbidden:
                 pass
             await message.channel.send(
-                f"{message.author.mention}, please post exactly one valid Suno song link per message."
+                f"{message.author.mention}, please post exactly one valid suno track link per message."
             )
             return
 
@@ -72,7 +81,7 @@ class LinkChecker(commands.Cog):
             except discord.Forbidden:
                 pass
             await message.channel.send(
-                f"{message.author.mention}, please post only one link, and it must be a valid Suno song link."
+                f"{message.author.mention}, please post only one link, and it must be a valid suno track link."
             )
             return
 
@@ -82,18 +91,17 @@ class LinkChecker(commands.Cog):
         # Retrieve the list of posted links for this guild from configuration
         posted_links = await self.config.guild(message.guild).posted_links()
         current_time = time.time()
-
+        
         # Clean the history: keep only links that are less than or equal to one week old
         cleaned_links = [
             entry for entry in posted_links
             if current_time - entry.get("timestamp", 0) <= ONE_WEEK_SECONDS
         ]
-        # Update configuration if any old links were removed
         if len(cleaned_links) != len(posted_links):
             await self.config.guild(message.guild).posted_links.set(cleaned_links)
         posted_links = cleaned_links
 
-        # Check if the normalized link is already in the posted links history
+        # Check if the normalized link already exists in the posted links history
         duplicate_found = any(
             normalized_link == entry.get("link") for entry in posted_links
         )
@@ -104,18 +112,15 @@ class LinkChecker(commands.Cog):
             except discord.Forbidden:
                 pass
 
-            # Mark the message as processed
             self.processed_messages.add(message.id)
 
-            # Increment the duplicate count for this user
             duplicate_counts = await self.config.guild(message.guild).duplicate_counts()
             user_id = str(message.author.id)
             count = duplicate_counts.get(user_id, 0) + 1
             duplicate_counts[user_id] = count
             await self.config.guild(message.guild).duplicate_counts.set(duplicate_counts)
 
-            # Send a warning message in English in the channel
-            warning = f"{message.author.mention}, your song has already been posted. Please refrain from posting duplicate links."
+            warning = f"{message.author.mention}, your link is a duplicate. Please refrain from posting duplicate links."
             await message.channel.send(warning)
             if count >= 3:
                 extra_warning = (
@@ -124,7 +129,6 @@ class LinkChecker(commands.Cog):
                 )
                 await message.channel.send(extra_warning)
 
-            # Send a notification to the admins in the specified channel
             admin_channel = self.bot.get_channel(1326495268862169122)
             if admin_channel:
                 admin_message = (
@@ -138,7 +142,7 @@ class LinkChecker(commands.Cog):
                     pass
             return
 
-        # If no duplicate is found, add the new normalized link with current timestamp
+        # If no duplicate is found, add the new normalized link with the current timestamp
         posted_links.append({
             "link": normalized_link,
             "timestamp": current_time
