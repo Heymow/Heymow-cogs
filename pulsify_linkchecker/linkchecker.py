@@ -6,7 +6,7 @@ from redbot.core import commands, Config
 ONE_WEEK_SECONDS = 604800  # Number of seconds in one week
 
 # Set of allowed channel IDs (replace with your channel IDs)
-ALLOWED_CHANNEL_IDS = {1351300851003822161}
+ALLOWED_CHANNEL_IDS = {1351300851003822161, 1351280955989557258}
 
 def normalize_link(link: str) -> str:
     """
