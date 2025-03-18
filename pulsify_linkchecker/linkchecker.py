@@ -6,7 +6,7 @@ from redbot.core import commands, Config
 ONE_WEEK_SECONDS = 604800  # Number of seconds in one week
 
 # Set of allowed channel IDs (replace with your channel IDs)
-ALLOWED_CHANNEL_IDS = {1306660377211310091, 1322627330929070212}
+ALLOWED_CHANNEL_IDS = {1351300851003822161}
 
 def normalize_link(link: str) -> str:
     """
@@ -129,7 +129,7 @@ class Pulsify_LinkChecker(commands.Cog):
                 )
                 await message.channel.send(extra_warning)
 
-            admin_channel = self.bot.get_channel(1326495268862169122)
+            admin_channel = self.bot.get_channel(1351300851003822161)
             if admin_channel:
                 admin_message = (
                     f"Admin Alert: User {message.author} (ID: {message.author.id}) posted a duplicate link in "
