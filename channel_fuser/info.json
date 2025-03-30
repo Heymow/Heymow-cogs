@@ -1,0 +1,26 @@
+{
+    "author": [
+        "Heymow"
+    ],
+    "description": "Fuse Discord channels.",
+    "disabled": false,
+    "end_user_data_statement": "This cog does not persistently store data or metadata about users.",
+    "hidden": false,
+    "install_msg": "Channel Fuser successfully loaded.",
+    "max_bot_version": "0.0.0",
+    "min_bot_version": "3.5.0",
+    "min_python_version": [
+        3,
+        7,
+        2
+    ],
+    "name": "Channel Fuser",
+    "permissions": [],
+    "required_cogs": {},
+    "requirements": [],
+    "short": "Check link doubles",
+    "tags": [
+        "utility"
+    ],
+    "type": "COG"
+}
