@@ -13,59 +13,60 @@ class ChannelFusion(commands.Cog):
     @commands.command(name="fusechannels")
     @commands.admin()
     async def fuse_channels(self, ctx, target: discord.TextChannel, *sources: discord.TextChannel):
-        """Fuse multiple channels into a target channel (with webhooks)."""
+        """Fuse multiple channels into a target channel (with webhooks), sorted by global message date."""
         if not sources:
             await ctx.send("Please specify at least one source channel.")
             return
 
-        await ctx.send(f"Starting fusion from {len(sources)} channels into {target.mention}...")
+        await ctx.send(f"Collecting messages from {len(sources)} channels...")
+
+        all_messages = []
+
+        for source in sources:
+            try:
+                messages = [msg async for msg in source.history(limit=None, oldest_first=True)]
+                all_messages.extend(messages)
+            except Exception as e:
+                await ctx.send(f"Failed to read from {source.mention}: {e}")
+
+        # Global sort by message creation date
+        all_messages.sort(key=lambda m: m.created_at)
+
+        await ctx.send(f"Sending {len(all_messages)} messages to {target.mention}...")
 
         webhook = await self._get_or_create_webhook(target)
 
-        for source in sources:
-            await ctx.send(f"Copying messages from {source.mention}...")
-            messages = [msg async for msg in source.history(limit=None, oldest_first=True)]
+        for msg in all_messages:
+            if msg.type != discord.MessageType.default:
+                continue
 
-            for msg in messages:
-                if msg.type != discord.MessageType.default:
-                    continue  # Skip non-standard messages like pins, joins, etc.
+            if msg.content.strip() == "" and not msg.attachments:
+                continue
 
-                if msg.content.strip() == "" and not msg.attachments:
-                    continue  # Skip empty messages
+            if msg.author.bot:
+                continue
 
-                if msg.author.bot:
-                    continue  # Optional: skip bot messages
+            content = msg.content
+            files = []
 
-                content = msg.content
-                files = []
-                try:
-                    for attachment in msg.attachments:
-                        file = await attachment.to_file()
-                        files.append(file)
+            try:
+                for attachment in msg.attachments:
+                    file = await attachment.to_file()
+                    files.append(file)
 
-                    kwargs = {
-                        "content": content,
-                        "username": msg.author.display_name,
-                        "avatar_url": msg.author.display_avatar.url,
-                        "allowed_mentions": discord.AllowedMentions.none(),
-                    }
+                kwargs = {
+                    "content": content,
+                    "username": msg.author.display_name,
+                    "avatar_url": msg.author.display_avatar.url,
+                    "allowed_mentions": discord.AllowedMentions.none(),
+                }
 
-                    if files:
-                        kwargs["files"] = files
+                if files:
+                    kwargs["files"] = files
 
-                    await webhook.send(**kwargs)
+                await webhook.send(**kwargs)
 
-                except Exception as e:
-                    await ctx.send(f"Error sending a message from {msg.author.display_name}: {e}")
+            except Exception as e:
+                await ctx.send(f"Error sending a message from {msg.author.display_name}: {e}")
 
-        await ctx.send("✅ Channel fusion complete!")
-
-    async def _get_or_create_webhook(self, channel: discord.TextChannel) -> discord.Webhook:
-        webhooks = await channel.webhooks()
-        for wh in webhooks:
-            if wh.user == self.bot.user:
-                return wh
-        return await channel.create_webhook(name="ChannelFusionWebhook")
-
-async def setup(bot):
-    await bot.add_cog(ChannelFusion(bot))
+        await ctx.send("✅ Fusion complete, messages sent in chronological order!")
