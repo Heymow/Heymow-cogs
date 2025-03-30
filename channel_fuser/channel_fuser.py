@@ -43,13 +43,18 @@ class ChannelFusion(commands.Cog):
                         file = await attachment.to_file()
                         files.append(file)
 
-                    await webhook.send(
-                        content=content,
-                        username=msg.author.display_name,
-                        avatar_url=msg.author.display_avatar.url,
-                        files=files if files else None,
-                        allowed_mentions=discord.AllowedMentions.none(),
-                    )
+                    kwargs = {
+                        "content": content,
+                        "username": msg.author.display_name,
+                        "avatar_url": msg.author.display_avatar.url,
+                        "allowed_mentions": discord.AllowedMentions.none(),
+                    }
+
+                    if files:
+                        kwargs["files"] = files
+
+                    await webhook.send(**kwargs)
+
                 except Exception as e:
                     await ctx.send(f"Error sending a message from {msg.author.display_name}: {e}")
 
