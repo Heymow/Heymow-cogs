@@ -70,3 +70,12 @@ class ChannelFusion(commands.Cog):
                 await ctx.send(f"Error sending a message from {msg.author.display_name}: {e}")
 
         await ctx.send("✅ Fusion complete, messages sent in chronological order!")
+
+    async def _get_or_create_webhook(self, channel: discord.TextChannel) -> discord.Webhook:
+        """Get an existing webhook created by the bot, or create a new one."""
+        webhooks = await channel.webhooks()
+        for wh in webhooks:
+            if wh.user == self.bot.user:
+                return wh
+        return await channel.create_webhook(name="ChannelFusionWebhook")
+
