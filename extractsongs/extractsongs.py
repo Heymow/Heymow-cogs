@@ -63,9 +63,75 @@ class Extractsongs(commands.Cog):
     @commands.command()
     @commands.has_permissions(manage_messages=True)
     async def view_data(self, ctx):
-        """Shows stored channel data, raw format"""
+        """Shows stored channel data, formatted for readability"""
         guild_data = await self.config.guild(ctx.guild).all()
-        await ctx.send(f"Guild Data: {guild_data}")
+        
+        # Create a formatted embed instead of raw text
+        embed = discord.Embed(
+            title="📊 Guild Data Overview",
+            color=discord.Color.blue()
+        )
+        
+        # Listening channels
+        listening_channels = guild_data.get("listening_channels", [])
+        if listening_channels:
+            channels_text = ', '.join([f"<#{ch_id}>" for ch_id in listening_channels])
+            embed.add_field(name="🎧 Listening Channels", value=channels_text, inline=False)
+        else:
+            embed.add_field(name="🎧 Listening Channels", value="None", inline=False)
+    
+        # Output channel
+        output_channel = guild_data.get("output_channel")
+        embed.add_field(
+            name="📤 Output Channel", 
+            value=f"<#{output_channel}>" if output_channel else "None", 
+            inline=True
+        )
+        
+        # Daily channel
+        daily_channel = guild_data.get("daily_channel")
+        embed.add_field(
+            name="📊 Daily Channel", 
+            value=f"<#{daily_channel}>" if daily_channel else "None", 
+            inline=True
+        )
+        
+        # Notification channel
+        notification_channel = guild_data.get("notification_channel")
+        embed.add_field(
+            name="🔔 Notification Channel", 
+            value=f"<#{notification_channel}>" if notification_channel else "None", 
+            inline=True
+        )
+        
+        # Songs count
+        saved_songs = guild_data.get("saved_songs", {})
+        embed.add_field(
+            name="🎵 Saved Songs", 
+            value=f"{len(saved_songs)} songs", 
+            inline=True
+        )
+        
+        # Last daily timestamp
+        last_daily = guild_data.get("last_daily_timestamp")
+        embed.add_field(
+            name="⏰ Last Daily Summary", 
+            value=last_daily if last_daily else "Never", 
+            inline=True
+        )
+        
+        await ctx.send(embed=embed)
+        
+        # If there are songs, show them in a separate message
+        if saved_songs:
+            songs_text = "**Recent Songs:**\n"
+            for i, (song_id, data) in enumerate(list(saved_songs.items())[:10]):  # Show only first 10
+                songs_text += f"`{song_id}` - <@{data.get('author_id', 'Unknown')}>\n"
+            
+            if len(saved_songs) > 10:
+                songs_text += f"... and {len(saved_songs) - 10} more songs"
+            
+            await ctx.send(songs_text)
 
     @commands.command()
     @commands.has_permissions(manage_messages=True)
