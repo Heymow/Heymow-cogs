@@ -22,6 +22,7 @@ class Extractsongs(commands.Cog):
             "listening_channels": [],
             "output_channel": None,  # Channel to send individual songs
             "daily_channel": None,   # Channel to send daily summary
+            "notification_channel": None,  # Channel for notification messages
             "saved_songs": {},       # For storing song information
             "last_daily_timestamp": None  # To track the last daily execution
         }
@@ -29,6 +30,7 @@ class Extractsongs(commands.Cog):
         self.listening_channels = {}
         self.output_channels = {}
         self.daily_channels = {}
+        self.notification_channels = {}
         
         # Create a folder to save data locally - use data_path for Railway compatibility
         self.data_path = pathlib.Path("./song_cache")
@@ -53,6 +55,8 @@ class Extractsongs(commands.Cog):
             del self.output_channels[guild_id]
         if guild_id in self.daily_channels:
             del self.daily_channels[guild_id]
+        if guild_id in self.notification_channels:
+            del self.notification_channels[guild_id]
         await self.initialize(ctx.guild)
         await ctx.send(f"Data cleared for guild: {ctx.guild.name}")
 
@@ -132,6 +136,14 @@ class Extractsongs(commands.Cog):
         
     @commands.command()
     @commands.has_permissions(manage_messages=True)
+    async def set_notification(self, ctx, channel: discord.TextChannel):
+        """Set the channel where notification messages will be sent."""
+        await self.config.guild(ctx.guild).notification_channel.set(channel.id)
+        self.notification_channels[ctx.guild.id] = channel.id
+        await ctx.send(f"Notification channel set to {channel.mention}")
+        
+    @commands.command()
+    @commands.has_permissions(manage_messages=True)
     async def send_summary_now(self, ctx):
         """Force send a summary of songs collected now."""
         await ctx.send("Generating song summary...")
@@ -148,11 +160,15 @@ class Extractsongs(commands.Cog):
         
         daily_channel = await self.config.guild(guild).daily_channel()
         self.daily_channels[guild.id] = daily_channel
+        
+        notification_channel = await self.config.guild(guild).notification_channel()
+        self.notification_channels[guild.id] = notification_channel
 
         print(f"Initialized for guild: {guild.name} ({guild.id})")
         print(f"Listening Channels: {listening_channels}")
         print(f"Output Channel: {output_channel}")
         print(f"Daily Summary Channel: {daily_channel}")
+        print(f"Notification Channel: {notification_channel}")
 
     async def cog_load(self):
         for guild in self.bot.guilds:
@@ -201,6 +217,8 @@ class Extractsongs(commands.Cog):
     async def save_song_locally(self, message, channel, guild, song_id):
         """Save the song locally instead of sending to an API."""
         try:
+            from datetime import timezone
+            
             # Standardized link format, always use the long format
             song_url = f"https://suno.com/song/{song_id}"
             
@@ -211,7 +229,7 @@ class Extractsongs(commands.Cog):
                 "server_name": guild.name,
                 "channel_name": channel.name,
                 "message_id": message.id,
-                "posted_time": message.created_at.isoformat(),
+                "posted_time": message.created_at.replace(tzinfo=timezone.utc).isoformat(),
                 "channel_id": channel.id,
                 "author_id": message.author.id,
                 "author_name": str(message.author)
@@ -271,15 +289,33 @@ class Extractsongs(commands.Cog):
         if not saved_songs:
             return
             
-        # Filter songs from the last 24 hours
-        yesterday = datetime.now() - timedelta(days=1)
-        recent_songs = {
-            song_id: data for song_id, data in saved_songs.items() 
-            if datetime.fromisoformat(data["posted_time"]) >= yesterday
-        }
+        # Filter songs from the last 24 hours - fix datetime comparison
+        from datetime import timezone
+        yesterday = datetime.now(timezone.utc) - timedelta(days=1)
+        recent_songs = {}
+        
+        for song_id, data in saved_songs.items():
+            try:
+                posted_time = datetime.fromisoformat(data["posted_time"])
+                # If posted_time is naive, make it UTC aware
+                if posted_time.tzinfo is None:
+                    posted_time = posted_time.replace(tzinfo=timezone.utc)
+                
+                if posted_time >= yesterday:
+                    recent_songs[song_id] = data
+            except (KeyError, ValueError) as e:
+                print(f"Error parsing posted_time for song {song_id}: {str(e)}")
+                continue
         
         if not recent_songs:
-            await daily_channel.send("No new Suno songs have been shared in the last 24 hours.")
+            # Send to notification channel instead of daily channel if no songs
+            notification_channel_id = self.notification_channels.get(guild.id)
+            if notification_channel_id:
+                notification_channel = self.bot.get_channel(notification_channel_id)
+                if notification_channel:
+                    await notification_channel.send("No new Suno songs have been shared in the last 24 hours.")
+            else:
+                await daily_channel.send("No new Suno songs have been shared in the last 24 hours.")
             return
             
         # Convert to list for easier slicing
@@ -299,7 +335,7 @@ class Extractsongs(commands.Cog):
                 title=f"📊 Suno Songs Summary ({batch_number}/{total_batches})",
                 description=f"**{total_songs} songs** shared in the last 24 hours",
                 color=discord.Color.gold(),
-                timestamp=datetime.now()
+                timestamp=datetime.now(timezone.utc)
             )
             
             # Add songs from this batch to the embed
@@ -320,7 +356,7 @@ class Extractsongs(commands.Cog):
             
             # Send the summary for this batch
             await daily_channel.send(embed=embed)
-        
+    
         # Delete all processed songs
         for song_id in recent_songs.keys():
             if song_id in saved_songs:
@@ -338,6 +374,48 @@ class Extractsongs(commands.Cog):
         # Update config with remaining songs (if any)
         await self.config.guild(guild).saved_songs.set(saved_songs)
         print(f"Removed {total_songs} songs from memory after daily summary for guild {guild.name}")
+
+    @commands.command()
+    @commands.has_permissions(manage_messages=True)
+    async def list_config(self, ctx: commands.Context):
+        """List all configured channels."""
+        guild = ctx.guild
+        listening_channels = await self.config.guild(guild).listening_channels()
+        output_channel = await self.config.guild(guild).output_channel()
+        daily_channel = await self.config.guild(guild).daily_channel()
+        notification_channel = await self.config.guild(guild).notification_channel()
+        
+        embed = discord.Embed(
+            title="📋 Current Configuration",
+            color=discord.Color.blue()
+        )
+        
+        # Listening channels
+        if listening_channels:
+            channels_list = ', '.join([f"<#{ch_id}>" for ch_id in listening_channels])
+            embed.add_field(name="🎧 Listening Channels", value=channels_list, inline=False)
+        else:
+            embed.add_field(name="🎧 Listening Channels", value="None configured", inline=False)
+        
+        # Output channel
+        if output_channel:
+            embed.add_field(name="📤 Output Channel", value=f"<#{output_channel}>", inline=True)
+        else:
+            embed.add_field(name="📤 Output Channel", value="None configured", inline=True)
+        
+        # Daily summary channel
+        if daily_channel:
+            embed.add_field(name="📊 Daily Summary Channel", value=f"<#{daily_channel}>", inline=True)
+        else:
+            embed.add_field(name="📊 Daily Summary Channel", value="None configured", inline=True)
+        
+        # Notification channel
+        if notification_channel:
+            embed.add_field(name="🔔 Notification Channel", value=f"<#{notification_channel}>", inline=True)
+        else:
+            embed.add_field(name="🔔 Notification Channel", value="None configured", inline=True)
+        
+        await ctx.send(embed=embed)
 
 async def setup(bot):
     await bot.add_cog(Extractsongs(bot))
