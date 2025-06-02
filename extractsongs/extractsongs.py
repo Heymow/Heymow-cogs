@@ -68,7 +68,7 @@ class Extractsongs(commands.Cog):
         
         # Create a formatted embed instead of raw text
         embed = discord.Embed(
-            title="📊 Guild Data Overview",
+            title="📊 Songs Data Overview",
             color=discord.Color.blue()
         )
         
@@ -335,7 +335,7 @@ class Extractsongs(commands.Cog):
                         await self.send_daily_summary(guild)
                         await self.config.guild(guild).last_daily_timestamp.set(now.isoformat())
                 except Exception as e:
-                    print(f"Error in daily summary for guild {guild.name}: {str(e)}")
+                    print(f"Error in daily summary for server {guild.name}: {str(e)}")
             
             # Wait for next check (every hour)
             await asyncio.sleep(3600)
@@ -439,7 +439,7 @@ class Extractsongs(commands.Cog):
         
         # Update config with remaining songs (if any)
         await self.config.guild(guild).saved_songs.set(saved_songs)
-        print(f"Removed {total_songs} songs from memory after daily summary for guild {guild.name}")
+        print(f"Removed {total_songs} songs from memory after daily summary for server {guild.name}")
 
     @commands.command()
     @commands.has_permissions(manage_messages=True)
