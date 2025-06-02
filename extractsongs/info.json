@@ -1,0 +1,9 @@
+{
+    "author": ["Heymow"],
+    "install_msg": "Thanks for installing the Extractsongs cog!",
+    "name": "Extractsongs",
+    "short": "Makes a daily list of songs to be posted in a Discord channel.",
+    "description": "Monitors Discord channels for Suno song links, collects them, and creates a daily summary.",
+    "tags": ["music", "suno", "collection", "summary"],
+    "min_bot_version": "3.5.0"
+}
