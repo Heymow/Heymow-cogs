@@ -266,14 +266,16 @@ class Extractsongs(commands.Cog):
                     if song_id:
                         print(f"Found Song ID: {song_id}")
                         
-                        # Determine the correct URL format BEFORE saving
-                        if len(song_id) == 8 and song_id.isalnum():  # Short format like "abc12345"
+                        # Determine the correct URL format based on which group matched
+                        if match[0]:  # Long format from song/ URL
+                            correct_song_url = f"https://suno.com/song/{song_id}"
+                        elif match[1]:  # Short format from s/ URL
                             correct_song_url = f"https://suno.com/s/{song_id}"
-                        elif "-" in song_id:  # Long format like "abc12345-6789-def0-..."
-                            correct_song_url = f"https://suno.com/song/{song_id}"
                         else:
-                            # Default to song format if unsure
+                            # Fallback (should not happen)
                             correct_song_url = f"https://suno.com/song/{song_id}"
+                        
+                        print(f"Detected URL format: {correct_song_url}")
                         
                         success = await self.save_song_locally(message, message.channel, message.guild, song_id, correct_song_url)
                         
@@ -298,6 +300,8 @@ class Extractsongs(commands.Cog):
         try:
             from datetime import timezone
             
+            print(f"save_song_locally called with song_url: {song_url}")
+            
             # Check if song already exists
             saved_songs = await self.config.guild(guild).saved_songs()
             if song_id in saved_songs:
@@ -313,6 +317,8 @@ class Extractsongs(commands.Cog):
                 else:
                     # Default to song format if unsure
                     song_url = f"https://suno.com/song/{song_id}"
+        
+            print(f"Final song_url used: {song_url}")
             
             # Create a dictionary of song data
             song_data = {
