@@ -244,7 +244,7 @@ class Extractsongs(commands.Cog):
     async def on_message(self, message):
         if message.author.bot:
             return
-        
+    
         guild_id = message.guild.id
         listening_channel_ids = self.listening_channels.get(guild_id, {})
         
@@ -265,6 +265,16 @@ class Extractsongs(commands.Cog):
                     song_id = match[0] if match[0] else match[1]
                     if song_id:
                         print(f"Found Song ID: {song_id}")
+                        
+                        # Determine the correct URL format BEFORE saving
+                        if len(song_id) == 8 and song_id.isalnum():  # Short format like "abc12345"
+                            correct_song_url = f"https://suno.com/s/{song_id}"
+                        elif "-" in song_id:  # Long format like "abc12345-6789-def0-..."
+                            correct_song_url = f"https://suno.com/song/{song_id}"
+                        else:
+                            # Default to song format if unsure
+                            correct_song_url = f"https://suno.com/song/{song_id}"
+                        
                         success = await self.save_song_locally(message, message.channel, message.guild, song_id)
                         
                         if success:
@@ -273,17 +283,15 @@ class Extractsongs(commands.Cog):
                             if output_channel_id:
                                 output_channel = self.bot.get_channel(output_channel_id)
                                 if output_channel:
-                                    # Get the saved song data to use the correct URL
-                                    saved_songs = await self.config.guild(message.guild).saved_songs()
-                                    song_data = saved_songs.get(song_id, {})
-                                    song_url = song_data.get("song_url", f"https://suno.com/song/{song_id}")
-                                    
                                     embed = discord.Embed(
                                         title="New Suno song saved",
-                                        description=f"ID: {song_id}\nShared by: {message.author.mention}\n[Song link]({song_url})",
+                                        description=f"ID: {song_id}\nShared by: {message.author.mention}\n[Song link]({correct_song_url})",
                                         color=discord.Color.blue()
                                     )
                                     await output_channel.send(embed=embed)
+                        else:
+                            # Song already exists - optionally send a different message or just skip silently
+                            print(f"Song {song_id} was already saved, skipping notification")
 
     async def save_song_locally(self, message, channel, guild, song_id):
         """Save the song locally instead of sending to an API."""
