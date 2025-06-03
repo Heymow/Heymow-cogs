@@ -10,18 +10,28 @@ ALLOWED_CHANNEL_IDS = {1306660377211310091, 1322627330929070212}
 
 def normalize_link(link: str) -> str:
     """
-    Normalize a link from suno.com/song/ by removing the prefix and
+    Normalize a link from suno.com/song/ or suno.com/s/ by removing the prefix and
     discarding any query parameters starting with '?sh'.
     For other links, simply return the lowercased and stripped version.
     """
-    prefix = "https://suno.com/song/"
-    if link.startswith(prefix):
+    song_prefix = "https://suno.com/song/"
+    s_prefix = "https://suno.com/s/"
+    
+    if link.startswith(song_prefix):
         # Remove the prefix from the link
-        song_id = link[len(prefix):]
+        song_id = link[len(song_prefix):]
         # Remove query parameters if they exist (anything starting with '?sh')
         if "?sh" in song_id:
             song_id = song_id.split("?sh", 1)[0]
         return song_id.lower().strip()
+    elif link.startswith(s_prefix):
+        # Remove the prefix from the link
+        song_id = link[len(s_prefix):]
+        # Remove query parameters if they exist (anything starting with '?sh')
+        if "?sh" in song_id:
+            song_id = song_id.split("?sh", 1)[0]
+        return song_id.lower().strip()
+    
     return link.strip().lower()
 
 class LinkChecker(commands.Cog):
@@ -58,10 +68,20 @@ class LinkChecker(commands.Cog):
         if message.channel.id not in ALLOWED_CHANNEL_IDS:
             return
 
+        # Extract suno links using the improved regex pattern
+        pattern = r"https://suno\.com/(?:song/([a-f0-9\-]+)|s/([a-zA-Z0-9]+))"
+        suno_matches = re.findall(pattern, message.content)
+        
+        # Convert matches to actual links
+        suno_links = []
+        for match in suno_matches:
+            if match[0]:  # song/ format
+                suno_links.append(f"https://suno.com/song/{match[0]}")
+            elif match[1]:  # s/ format
+                suno_links.append(f"https://suno.com/s/{match[1]}")
+
         # Extract all links from the message using regex
         all_links = re.findall(r'https?://\S+', message.content)
-        # Filter only suno track links
-        suno_links = [link for link in all_links if link.startswith("https://suno.com/song/")]
 
         # Check that exactly one suno link is present
         if len(suno_links) != 1:
