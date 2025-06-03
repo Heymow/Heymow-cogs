@@ -275,7 +275,7 @@ class Extractsongs(commands.Cog):
                             # Default to song format if unsure
                             correct_song_url = f"https://suno.com/song/{song_id}"
                         
-                        success = await self.save_song_locally(message, message.channel, message.guild, song_id)
+                        success = await self.save_song_locally(message, message.channel, message.guild, song_id, correct_song_url)
                         
                         if success:
                             # Send to output channel if defined
@@ -293,7 +293,7 @@ class Extractsongs(commands.Cog):
                             # Song already exists - optionally send a different message or just skip silently
                             print(f"Song {song_id} was already saved, skipping notification")
 
-    async def save_song_locally(self, message, channel, guild, song_id):
+    async def save_song_locally(self, message, channel, guild, song_id, song_url=None):
         """Save the song locally instead of sending to an API."""
         try:
             from datetime import timezone
@@ -304,14 +304,15 @@ class Extractsongs(commands.Cog):
                 print(f"Song {song_id} already exists, skipping save")
                 return False
             
-            # Determine the correct URL format based on song_id format
-            if len(song_id) == 8 and song_id.isalnum():  # Short format like "abc12345"
-                song_url = f"https://suno.com/s/{song_id}"
-            elif "-" in song_id:  # Long format like "abc12345-6789-def0-..."
-                song_url = f"https://suno.com/song/{song_id}"
-            else:
-                # Default to song format if unsure
-                song_url = f"https://suno.com/song/{song_id}"
+            # Use the provided song_url or determine it based on the song_id
+            if not song_url:
+                if len(song_id) == 8 and song_id.isalnum():  # Short format like "abc12345"
+                    song_url = f"https://suno.com/s/{song_id}"
+                elif "-" in song_id:  # Long format like "abc12345-6789-def0-..."
+                    song_url = f"https://suno.com/song/{song_id}"
+                else:
+                    # Default to song format if unsure
+                    song_url = f"https://suno.com/song/{song_id}"
             
             # Create a dictionary of song data
             song_data = {
