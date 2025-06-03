@@ -23,6 +23,7 @@ class Extractsongs(commands.Cog):
             "output_channel": None,  # Channel to send individual songs
             "daily_channel": None,   # Channel to send daily summary
             "notification_channel": None,  # Channel for notification messages
+            "log_channel": None,     # Channel for debug/log messages
             "saved_songs": {},       # For storing song information
             "last_daily_timestamp": None  # To track the last daily execution
         }
@@ -31,6 +32,7 @@ class Extractsongs(commands.Cog):
         self.output_channels = {}
         self.daily_channels = {}
         self.notification_channels = {}
+        self.log_channels = {}
         
         # Create a folder to save data locally - use data_path for Railway compatibility
         self.data_path = pathlib.Path("./song_cache")
@@ -210,6 +212,14 @@ class Extractsongs(commands.Cog):
         
     @commands.command()
     @commands.has_permissions(manage_messages=True)
+    async def set_log(self, ctx, channel: discord.TextChannel):
+        """Set the channel where log messages will be sent."""
+        await self.config.guild(ctx.guild).log_channel.set(channel.id)
+        self.log_channels[ctx.guild.id] = channel.id
+        await ctx.send(f"Log channel set to {channel.mention}")
+        
+    @commands.command()
+    @commands.has_permissions(manage_messages=True)
     async def send_summary_now(self, ctx):
         """Force send a summary of songs collected now."""
         await ctx.send("Generating song summary...")
@@ -229,8 +239,11 @@ class Extractsongs(commands.Cog):
         
         notification_channel = await self.config.guild(guild).notification_channel()
         self.notification_channels[guild.id] = notification_channel
+        
+        log_channel = await self.config.guild(guild).log_channel()
+        self.log_channels[guild.id] = log_channel
 
-        print(f"Initialized for guild: {guild.name} ({guild.id})")
+        await self.send_log(guild, f"Initialized for guild: {guild.name} ({guild.id})")
         print(f"Listening Channels: {listening_channels}")
         print(f"Output Channel: {output_channel}")
         print(f"Daily Summary Channel: {daily_channel}")
@@ -294,6 +307,8 @@ class Extractsongs(commands.Cog):
                         else:
                             # Song already exists - optionally send a different message or just skip silently
                             print(f"Song {song_id} was already saved, skipping notification")
+                            await self.send_log(message.guild, f"Found Song ID: {song_id}")
+                            await self.send_log(message.guild, f"Detected URL format: {correct_song_url}")
 
     async def save_song_locally(self, message, channel, guild, song_id, song_url=None):
         """Save the song locally instead of sending to an API."""
@@ -512,7 +527,24 @@ class Extractsongs(commands.Cog):
         else:
             embed.add_field(name="🔔 Notification Channel", value="None configured", inline=True)
         
+        # Log channel
+        log_channel = self.log_channels.get(guild.id)
+        if log_channel:
+            embed.add_field(name="🔍 Log Channel", value=f"<#{log_channel}>", inline=True)
+        else:
+            embed.add_field(name="🔍 Log Channel", value="None configured", inline=True)
+        
         await ctx.send(embed=embed)
+
+    async def send_log(self, guild, message):
+        """Send a log message to the configured log channel."""
+        log_channel_id = self.log_channels.get(guild.id)
+        if log_channel_id:
+            log_channel = self.bot.get_channel(log_channel_id)
+            if log_channel:
+                await log_channel.send(f"🔍 **Log:** {message}")
+        # Always print to console as well
+        print(message)
 
 async def setup(bot):
     await bot.add_cog(Extractsongs(bot))
