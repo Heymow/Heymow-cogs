@@ -273,9 +273,14 @@ class Extractsongs(commands.Cog):
                             if output_channel_id:
                                 output_channel = self.bot.get_channel(output_channel_id)
                                 if output_channel:
+                                    # Get the saved song data to use the correct URL
+                                    saved_songs = await self.config.guild(message.guild).saved_songs()
+                                    song_data = saved_songs.get(song_id, {})
+                                    song_url = song_data.get("song_url", f"https://suno.com/song/{song_id}")
+                                    
                                     embed = discord.Embed(
                                         title="New Suno song saved",
-                                        description=f"ID: {song_id}\nShared by: {message.author.mention}\n[Song link](https://suno.com/song/{song_id})",
+                                        description=f"ID: {song_id}\nShared by: {message.author.mention}\n[Song link]({song_url})",
                                         color=discord.Color.blue()
                                     )
                                     await output_channel.send(embed=embed)
@@ -285,8 +290,20 @@ class Extractsongs(commands.Cog):
         try:
             from datetime import timezone
             
-            # Standardized link format, always use the long format
-            song_url = f"https://suno.com/song/{song_id}"
+            # Check if song already exists
+            saved_songs = await self.config.guild(guild).saved_songs()
+            if song_id in saved_songs:
+                print(f"Song {song_id} already exists, skipping save")
+                return False
+            
+            # Determine the correct URL format based on song_id format
+            if len(song_id) == 8 and song_id.isalnum():  # Short format like "abc12345"
+                song_url = f"https://suno.com/s/{song_id}"
+            elif "-" in song_id:  # Long format like "abc12345-6789-def0-..."
+                song_url = f"https://suno.com/song/{song_id}"
+            else:
+                # Default to song format if unsure
+                song_url = f"https://suno.com/song/{song_id}"
             
             # Create a dictionary of song data
             song_data = {
@@ -302,7 +319,6 @@ class Extractsongs(commands.Cog):
             }
             
             # Save in Red config
-            saved_songs = await self.config.guild(guild).saved_songs()
             saved_songs[song_id] = song_data
             await self.config.guild(guild).saved_songs.set(saved_songs)
             
@@ -311,7 +327,7 @@ class Extractsongs(commands.Cog):
             with open(file_path, "w") as f:
                 json.dump(song_data, f, indent=2)
                 
-            print(f"Song {song_id} saved successfully")
+            print(f"Song {song_id} saved successfully with URL: {song_url}")
             return True
             
         except Exception as e:
@@ -407,7 +423,7 @@ class Extractsongs(commands.Cog):
             # Add songs from this batch to the embed
             for i, (song_id, data) in enumerate(current_batch):
                 song_number = batch_start + i + 1
-                # Create standard link
+                # Use the stored URL format instead of forcing song format
                 song_url = data.get("song_url", f"https://suno.com/song/{song_id}")
                 
                 embed.add_field(
