@@ -1,3 +1,5 @@
+[Heymow Cogs Logo](./heymow-cogs.png)
+
 # Heymow-Cogs
 
 A list of Redbot cogs for Discord with various functions.
