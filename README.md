@@ -1,4 +1,4 @@
-[Heymow Cogs Logo](./heymow-cogs.png)
+![Heymow Cogs Logo](./heymow-cogs.png)
 
 # Heymow-Cogs
 
