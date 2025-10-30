@@ -3,7 +3,7 @@
 # SAVE SONG
 # For Red-DiscordBot (cog)
 
-ExtractSongs is a Red-DiscordBot cog that listens for Suno song links shared in configured channels, saves song metadata locally and in Red's Config, and posts daily summaries of collected songs. It supports per-guild configuration for listening channels, output channels, notification channels, and a log channel.
+"Save Song" (extractsongs) is a Red-DiscordBot cog that listens for Suno song links shared in configured channels, saves song metadata locally and in Red's Config, and posts daily summaries of collected songs. It supports per-guild configuration for listening channels, output channels, notification channels, and a log channel.
 ---
 ## Features
 - Detects Suno links in messages (formats like `https://suno.com/song/<uuid>` and `https://suno.com/s/<shortid>`).
@@ -101,4 +101,4 @@ If you find issues or want enhancements:
 ## Contact
 - Repo owner: Heymow (see repository for links and more details).
 ---
-## Thank you for using the ExtractSongs cog! If you need help configuring it for your server, provide details of your setup and I'll help walk you through it.
+## Thank you for using the Save Song cog! If you need help configuring it for your server, provide details of your setup and I'll help walk you through it.
