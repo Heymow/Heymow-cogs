@@ -36,7 +36,7 @@
   - Read Messages / View Channel
   - Send Messages
   - Embed Links (to send embeds)
-  - (Optional) Manage Messages when using management commands — commands below require Manage Messages permission.
+  - (Optional) Manage Messages when using management commands. Commands below require Manage Messages permission.
 ---
 ## Commands
 All commands require the caller to have Manage Messages permission.
