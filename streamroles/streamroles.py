@@ -1295,7 +1295,7 @@ class StreamRoles(commands.Cog):
                     continue
                 # Convert to time struct
                 dt = time.gmtime(start)
-                day_of_week = (dt.tm_wday + 1) % 7  # Convert Monday=0 to Sunday=0
+                day_of_week = (dt.tm_wday + 1) % 7  # Convert Monday=0 to Sunday=0 (Monday->1, Sunday->0)
                 hour = dt.tm_hour
                 heatmap_data[day_of_week][hour] += 1
 

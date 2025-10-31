@@ -674,7 +674,15 @@
       
       // Update tab buttons
       document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
-      event.target.classList.add('active');
+      // Find the correct tab button based on tabName
+      const tabButtons = {
+        'overview': 0,
+        'heatmap': 1,
+        'streamers': 2,
+        'insights': 3
+      };
+      const tabIndex = tabButtons[tabName] || 0;
+      document.querySelectorAll('.tab')[tabIndex]?.classList.add('active');
       
       // Update tab content
       document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
@@ -739,11 +747,11 @@
       const totalHours = data.reduce((sum, x) => sum + x.value_hours, 0);
       const avgHours = totalStreamers > 0 ? (totalHours / totalStreamers).toFixed(1) : 0;
       
-      // Calculate total streams (we'll need to fetch this from all members data)
+      // Estimate total streams - rough approximation
+      const STREAMS_PER_HOUR_ESTIMATE = 2;
       let totalStreams = 0;
       data.forEach(x => {
-        // Use value as stream count if metric is count, otherwise estimate
-        totalStreams += Math.floor(x.value_hours * 2); // Rough estimate: 2 streams per hour of content
+        totalStreams += Math.floor(x.value_hours * STREAMS_PER_HOUR_ESTIMATE);
       });
       
       document.getElementById('totalStreamers').textContent = totalStreamers;
