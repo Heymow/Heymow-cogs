@@ -111,7 +111,7 @@ class StreamRolesAPI(commands.Cog):
         )
         # small static resources could be added here; for brevity dashboard returns single HTML
         runner = web.AppRunner(app)
-        await runner.setup()
+        # await runner.setup()
         site = web.TCPSite(runner, self.host, self.port)
         await site.start()
         self._runner = runner
