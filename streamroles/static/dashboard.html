@@ -13,7 +13,6 @@
 <body>
   <h2>StreamRoles - Minimal Dashboard</h2>
   <div id="controls">
-    <label>Guild ID: <input id="guild" /></label>
     <label>Period:
       <select id="period"><option value="7d">7d</option><option value="30d" selected>30d</option><option value="all">all</option></select>
     </label>
@@ -22,13 +21,11 @@
   <canvas id="topChart" width="900" height="350"></canvas>
   <script>
     async function fetchTop() {
-      const guild = document.getElementById('guild').value;
       const period = document.getElementById('period').value;
-      if(!guild){ alert('Guild required'); return; }
       const resp = await fetch('/dashboard/proxy/top', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ guild_id: guild, metric: 'time', period: period, limit: 10 })
+        body: JSON.stringify({ metric: 'time', period: period, limit: 10 })
       });
       if(!resp.ok){ alert('Error: ' + resp.status); return; }
       const data = await resp.json();

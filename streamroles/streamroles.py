@@ -99,6 +99,10 @@ class StreamRoles(commands.Cog):
         except Exception:
             self._api_port = self.DEFAULT_API_PORT
 
+        # read fixed guild id from env (optional)
+        guild_id_env = os.environ.get("STREAMROLES_GUILD_ID")
+        self._fixed_guild_id = int(guild_id_env) if guild_id_env and guild_id_env.isdigit() else None
+
         # precompute networks
         self._allowed_nets = [ipaddress.ip_network(c) for c in self._INTERNAL_CIDRS]
 
@@ -999,10 +1003,14 @@ class StreamRoles(commands.Cog):
             payload = await request.json()
         except Exception:
             return web.Response(status=400, text="Invalid JSON")
-        guild_id = payload.get("guild_id")
-        if not guild_id:
-            return web.Response(status=400, text="guild_id required")
-        guild = self.bot.get_guild(int(guild_id)) if guild_id else None
+        # resolve guild id: prefer fixed env var
+        if self._fixed_guild_id:
+            guild = self.bot.get_guild(self._fixed_guild_id)
+        else:
+            guild_id = payload.get("guild_id")
+            if not guild_id:
+                return web.Response(status=400, text="guild_id required")
+            guild = self.bot.get_guild(int(guild_id))
         if not guild:
             return web.Response(status=404, text="Guild not found")
         token = await self.conf.guild(guild).api_token()
@@ -1038,9 +1046,13 @@ class StreamRoles(commands.Cog):
         return web.json_response(top)
 
     async def _proxy_handle_member(self, request: web.Request):
-        guild_id = request.match_info.get("guild_id")
-        member_id = request.match_info.get("member_id")
-        guild = self.bot.get_guild(int(guild_id)) if guild_id else None
+        # prefer env var guild id; else use path param
+        if self._fixed_guild_id:
+            guild = self.bot.get_guild(self._fixed_guild_id)
+            member_id = request.match_info.get("member_id")
+        else:
+            guild = self.bot.get_guild(int(request.match_info.get("guild_id")))
+            member_id = request.match_info.get("member_id")
         if not guild:
             return web.Response(status=404, text="Guild not found")
         member = guild.get_member(int(member_id))
@@ -1077,9 +1089,12 @@ class StreamRoles(commands.Cog):
         return web.json_response(response)
 
     async def _proxy_handle_export(self, request: web.Request):
-        guild_id = request.match_info.get("guild_id")
-        member_id = request.match_info.get("member_id")
-        guild = self.bot.get_guild(int(guild_id)) if guild_id else None
+        if self._fixed_guild_id:
+            guild = self.bot.get_guild(self._fixed_guild_id)
+            member_id = request.match_info.get("member_id")
+        else:
+            guild = self.bot.get_guild(int(request.match_info.get("guild_id")))
+            member_id = request.match_info.get("member_id")
         if not guild:
             return web.Response(status=404, text="Guild not found")
         member = guild.get_member(int(member_id))
