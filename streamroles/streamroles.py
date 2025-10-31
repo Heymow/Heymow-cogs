@@ -1,7 +1,25 @@
-"""Module for the StreamRoles cog."""
+"""Module for the StreamRoles cog with streaming statistics support.
+
+- Collect per-member streaming sessions (start, end, duration, game, url).
+- Lightweight storage using Red's Config only (no external DB).
+- Retention policy (per-guild) to limit stored history.
+- Commands to view stats, export CSV and to show top N streamers by time or by count
+  for last week, last month, or overall ("all").
+- Keeps the Twitch-only and required-role behaviors added earlier.
+- Purges old sessions on insert to remain light on server resources.
+
+Notes:
+- This implementation aims to be lightweight: it stores only session lists per member,
+  prunes old sessions on insertion, and avoids background scanning. For very large
+  servers with many streamers you may want a more robust external DB.
+- The bot needs presence intents enabled to detect streaming activities.
+"""
 import asyncio
 import contextlib
+import csv
+import io
 import logging
+import time
 from typing import List, Optional, Tuple, Union
 
 import discord
@@ -18,18 +36,25 @@ UNIQUE_ID = 0x923476AF
 _alerts_channel_sentinel = object()
 
 
-class StreamRoles(commands.Cog):
-    """Give current twitch streamers in your server a role."""
+def _epoch_now() -> int:
+    return int(time.time())
 
-    # Set using [p]eval or something rather and the streamrole will be assigned simply
-    # whenever someone is streaming, regardless of whether or not they have a linked
-    # Twitch account. Makes for easier black-box testing.
+
+# retention helper: convert days to seconds
+def _days_to_seconds(days: int) -> int:
+    return int(days) * 24 * 60 * 60
+
+
+class StreamRoles(commands.Cog):
+    """Give current twitch streamers in your server a role and collect stats."""
+
     DEBUG_MODE = False
 
     def __init__(self, bot: Red):
         super().__init__()
         self.bot: Red = bot
         self.conf = Config.get_conf(self, force_registration=True, identifier=UNIQUE_ID)
+        # Guild config
         self.conf.register_guild(
             streamer_role=None,
             game_whitelist=[],
@@ -38,17 +63,32 @@ class StreamRoles(commands.Cog):
             alerts__channel=None,
             alerts__autodelete=True,
             required_role=None,  # ID of role required to be eligible for streamrole
+            stats__enabled=True,
+            stats__retention_days=365,  # keep sessions for 1 year by default
         )
+        # Member config
+        # - current_stream_start: epoch seconds when we detected stream start (None if not streaming)
+        # - stream_stats: list of session dicts {start,end,duration,game,platform,url}
         self.conf.register_member(
-            blacklisted=False, whitelisted=False, alert_messages={}
+            blacklisted=False,
+            whitelisted=False,
+            alert_messages={},
+            current_stream_start=None,
+            stream_stats=[],
         )
         self.conf.register_role(blacklisted=False, whitelisted=False)
 
+    # -----------------
+    # Initialization
+    # -----------------
     async def initialize(self) -> None:
         """Initialize the cog."""
         for guild in self.bot.guilds:
             await self._update_guild(guild)
 
+    # -----------------
+    # Commands
+    # -----------------
     @checks.admin_or_permissions(manage_roles=True)
     @commands.guild_only()
     @commands.group(autohelp=True, aliases=["streamroles"])
@@ -297,6 +337,23 @@ class StreamRoles(commands.Cog):
         await self._update_guild(ctx.guild)
 
     @streamrole.command()
+    async def setstatsretention(self, ctx: commands.Context, days: int):
+        """Set how many days to retain stream session stats (admin only)."""
+        if days < 1:
+            await ctx.send("Retention must be at least 1 day.")
+            return
+        await self.conf.guild(ctx.guild).stats.retention_days.set(days)
+        await ctx.send(f"Stats retention set to {days} days.")
+        await self._update_guild(ctx.guild)
+
+    @streamrole.command()
+    async def togglestats(self, ctx: commands.Context, enabled: bool):
+        """Enable or disable collection of streaming stats for this guild."""
+        await self.conf.guild(ctx.guild).stats.enabled.set(enabled)
+        await ctx.send(f"Streaming stats collection {'enabled' if enabled else 'disabled'}.")
+        await self._update_guild(ctx.guild)
+
+    @streamrole.command()
     async def forceupdate(self, ctx: commands.Context):
         """Force the bot to reassign streamroles to members in this server.
 
@@ -314,20 +371,229 @@ class StreamRoles(commands.Cog):
         await self._update_guild(ctx.guild)
         await ctx.tick()
 
-    async def get_streamer_role(self, guild: discord.Guild) -> Optional[discord.Role]:
-        """Get the streamrole for this guild.
+    # -----------------
+    # Stats commands
+    # -----------------
+    @streamrole.group()
+    async def stats(self, ctx: commands.Context):
+        """Streaming statistics commands (stats, export, top)."""
+        pass
 
-        Arguments
-        ---------
-        guild : discord.Guild
-            The guild to retrieve the streamer role for.
-
-        Returns
-        -------
-        Optional[discord.Role]
-            The role given to streaming users in this guild. ``None``
-            if not set.
+    @stats.command(name="show")
+    async def stats_show(
+        self, ctx: commands.Context, member: Optional[discord.Member] = None, period: str = "30d"
+    ):
         """
+        Show stats for a member.
+
+        period: "30d" for last 30 days, "7d" for last week, "30d" for 30 days, "all" for everything.
+        """
+        member = member or ctx.author
+        guild = ctx.guild
+        if not await self.conf.guild(guild).stats.enabled():
+            await ctx.send("Stats collection is disabled on this server.")
+            return
+
+        sessions = await self._get_member_sessions(member, guild)
+        if not sessions:
+            await ctx.send(f"No streaming sessions recorded for {member.mention}.")
+            return
+
+        now = _epoch_now()
+        if period.endswith("d"):
+            try:
+                days = int(period[:-1])
+            except Exception:
+                await ctx.send("Period must be like '7d', '30d', or 'all'.")
+                return
+            cutoff = now - _days_to_seconds(days)
+            filtered = [s for s in sessions if s.get("start", 0) >= cutoff]
+            period_label = f"last {days} days"
+        elif period == "all":
+            filtered = sessions
+            period_label = "all time"
+        else:
+            await ctx.send("Period must be like '7d', '30d', or 'all'.")
+            return
+
+        total_streams = len(filtered)
+        total_time = sum(s.get("duration", 0) for s in filtered)
+        avg_duration = total_time / total_streams if total_streams else 0
+
+        # average per week / per month over the period considered
+        if period == "all":
+            first = min(s["start"] for s in sessions)
+            days_span = max(1, (now - first) / 86400)
+        else:
+            if period.endswith("d"):
+                days_span = days
+            else:
+                days_span = 1
+        weeks = max(1, days_span / 7.0)
+        months = max(1, days_span / 30.44)
+
+        per_week = total_streams / weeks
+        per_month = total_streams / months
+
+        embed = discord.Embed(
+            title=f"Streaming stats for {member.display_name}",
+            description=f"Period: {period_label}\n",
+            colour=await ctx.embed_colour(),
+        )
+        embed.add_field(name="Total streams", value=str(total_streams), inline=True)
+        embed.add_field(
+            name="Total time", value=self._format_seconds(total_time), inline=True
+        )
+        embed.add_field(
+            name="Average duration", value=self._format_seconds(int(avg_duration)), inline=True
+        )
+        embed.add_field(name="Avg streams / week", value=f"{per_week:.2f}", inline=True)
+        embed.add_field(name="Avg streams / month", value=f"{per_month:.2f}", inline=True)
+
+        await ctx.send(embed=embed)
+
+    @stats.command(name="export")
+    async def stats_export(
+        self, ctx: commands.Context, member: Optional[discord.Member] = None, period: str = "all"
+    ):
+        """
+        Export sessions as CSV.
+
+        member: mention or leave out for command caller.
+        period: '7d', '30d', 'all'
+        """
+        member = member or ctx.author
+        guild = ctx.guild
+        if not await self.conf.guild(guild).stats.enabled():
+            await ctx.send("Stats collection is disabled on this server.")
+            return
+
+        sessions = await self._get_member_sessions(member, guild)
+        if not sessions:
+            await ctx.send("No sessions to export.")
+            return
+
+        now = _epoch_now()
+        if period.endswith("d"):
+            try:
+                days = int(period[:-1])
+            except Exception:
+                await ctx.send("Period must be like '7d', '30d', or 'all'.")
+                return
+            cutoff = now - _days_to_seconds(days)
+            filtered = [s for s in sessions if s.get("start", 0) >= cutoff]
+        elif period == "all":
+            filtered = sessions
+        else:
+            await ctx.send("Period must be like '7d', '30d', or 'all'.")
+            return
+
+        # build CSV in-memory
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(["start_iso", "end_iso", "start_epoch", "end_epoch", "duration_seconds", "game", "platform", "url"])
+        for s in filtered:
+            start = s.get("start")
+            end = s.get("end")
+            writer.writerow([
+                time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(start)) if start else "",
+                time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(end)) if end else "",
+                start or "",
+                end or "",
+                s.get("duration", ""),
+                s.get("game", "") or "",
+                s.get("platform", "") or "",
+                s.get("url", "") or "",
+            ])
+        buf.seek(0)
+        data = io.BytesIO(buf.getvalue().encode("utf-8"))
+        fname = f"{member.display_name}-stream-stats-{period}.csv"
+        await ctx.send(file=discord.File(fp=data, filename=fname))
+
+    @stats.command(name="top")
+    async def stats_top(
+        self,
+        ctx: commands.Context,
+        metric: str = "time",
+        period: str = "7d",
+        limit: int = 10,
+    ):
+        """
+        Show top N streamers in the guild.
+
+        metric: "time" or "count" (by total time or number of streams)
+        period: "7d", "30d", or "all"
+        limit: how many entries to display (max 50)
+        """
+        guild = ctx.guild
+        if limit < 1:
+            await ctx.send("Limit must be at least 1.")
+            return
+        limit = min(limit, 50)
+        if metric not in ("time", "count"):
+            await ctx.send("Metric must be 'time' or 'count'.")
+            return
+        if period not in ("7d", "30d", "all", "30d"):
+            await ctx.send("Period must be '7d', '30d', or 'all'.")
+            return
+
+        if not await self.conf.guild(guild).stats.enabled():
+            await ctx.send("Stats collection is disabled on this server.")
+            return
+
+        now = _epoch_now()
+        if period.endswith("d"):
+            days = int(period[:-1])
+            cutoff = now - _days_to_seconds(days)
+        else:
+            cutoff = 0
+
+        # scan members, collect metric per member
+        results = []
+        retention_days = await self.conf.guild(guild).stats.retention_days()
+        for member in guild.members:
+            sessions = await self._get_member_sessions(member, guild)
+            if not sessions:
+                continue
+            filtered = [s for s in sessions if s.get("start", 0) >= cutoff]
+            if not filtered:
+                continue
+            if metric == "time":
+                val = sum(s.get("duration", 0) for s in filtered)
+            else:
+                val = len(filtered)
+            results.append((member, val))
+
+        # sort descending
+        results.sort(key=lambda x: x[1], reverse=True)
+        top = results[:limit]
+
+        if not top:
+            await ctx.send("No data for the requested period.")
+            return
+
+        embed = discord.Embed(
+            title=f"Top {len(top)} streamers by {'time' if metric=='time' else 'streams'} ({period})",
+            colour=await ctx.embed_colour(),
+        )
+        for idx, (member, val) in enumerate(top, start=1):
+            if metric == "time":
+                value_str = self._format_seconds(val)
+            else:
+                value_str = str(val)
+            embed.add_field(
+                name=f"{idx}. {member.display_name}",
+                value=value_str,
+                inline=False,
+            )
+
+        await ctx.send(embed=embed)
+
+    # -----------------
+    # Core helpers
+    # -----------------
+    async def get_streamer_role(self, guild: discord.Guild) -> Optional[discord.Role]:
+        """Get the streamrole for this guild."""
         role_id = await self.conf.guild(guild).streamer_role()
         if not role_id:
             return
@@ -341,19 +607,7 @@ class StreamRoles(commands.Cog):
     async def get_alerts_channel(
         self, guild: discord.Guild
     ) -> Optional[discord.TextChannel]:
-        """Get the alerts channel for this guild.
-
-        Arguments
-        ---------
-        guild : discord.Guild
-            The guild to retrieve the alerts channel for.
-
-        Returns
-        -------
-        Optional[discord.TextChannel]
-            The channel where alerts are posted in this guild. ``None``
-            if not set or enabled.
-        """
+        """Get the alerts channel for this guild."""
         alerts_data = await self.conf.guild(guild).alerts.all()
         if not alerts_data["enabled"]:
             return
@@ -366,6 +620,41 @@ class StreamRoles(commands.Cog):
             return None
         return guild.get_role(role_id)
 
+    # -----------------
+    # Session storage helpers
+    # -----------------
+    async def _get_member_sessions(self, member: discord.Member, guild: discord.Guild) -> List[dict]:
+        """Return the member's stream session list (sorted by start asc)."""
+        data = await self.conf.member(member).stream_stats()
+        # Ensure list type
+        if not isinstance(data, list):
+            return []
+        # Remove any malformed items
+        sessions = [s for s in data if isinstance(s, dict) and "start" in s]
+        sessions.sort(key=lambda s: s.get("start", 0))
+        return sessions
+
+    async def _add_session_for_member(
+        self, member: discord.Member, session: dict, guild: discord.Guild
+    ):
+        """Append a session and apply retention prune."""
+        if not await self.conf.guild(guild).stats.enabled():
+            return
+        retention_days = await self.conf.guild(guild).stats.retention_days()
+        cutoff = _epoch_now() - _days_to_seconds(retention_days)
+        async with self.conf.member(member).stream_stats() as lst:
+            lst.append(session)
+            # prune old sessions (in-place)
+            # keep only sessions with start >= cutoff
+            pruned = [s for s in lst if s.get("start", 0) >= cutoff]
+            # replace list content
+            lst.clear()
+            lst.extend(pruned)
+        log.debug("Added session for %s: start=%s dur=%s", member.id, session.get("start"), session.get("duration"))
+
+    # -----------------
+    # Presence / session detection and main logic
+    # -----------------
     async def _update_member(
         self,
         member: discord.Member,
@@ -382,10 +671,10 @@ class StreamRoles(commands.Cog):
             else await self.get_alerts_channel(member.guild)
         )
 
-        # If a required role is configured, check it here. If the member doesn't have it,
-        # ensure the streamrole is removed (if present) and do nothing else.
+        # If a required role is configured, check it here.
         required = await self.get_required_role(member.guild)
         if required is not None and required not in member.roles:
+            # member doesn't have required role -> remove streamrole if present and stop tracking
             if role in member.roles:
                 log.debug(
                     "Removing streamrole %s from member %s because they lack required role %s",
@@ -396,6 +685,11 @@ class StreamRoles(commands.Cog):
                 await member.remove_roles(role)
                 if channel and await self.conf.guild(member.guild).alerts.autodelete():
                     await self._remove_alert(member, channel)
+            # also, if there's an ongoing streaming "current_stream_start", close it
+            current_start = await self.conf.member(member).current_stream_start()
+            if current_start:
+                # close session without recording (since requirement not met)
+                await self.conf.member(member).current_stream_start.set(None)
             return
 
         # find the first Streaming activity
@@ -403,9 +697,13 @@ class StreamRoles(commands.Cog):
             (a for a in member.activities if isinstance(a, discord.Streaming)),
             None,
         )
-        if activity is None:
-            has_role = role in member.roles
-            if has_role:
+
+        # if no activity or no platform -> treat as not streaming
+        if activity is None or not activity.platform:
+            # if we had a current_stream_start, finalize session
+            await self._finalize_current_session_if_any(member, activity, channel)
+            # remove role if present (standard behavior)
+            if role in member.roles:
                 log.debug("Removing streamrole %s from member %s", role.id, member.id)
                 await member.remove_roles(role)
                 if channel and await self.conf.guild(member.guild).alerts.autodelete():
@@ -416,7 +714,8 @@ class StreamRoles(commands.Cog):
         platform = str(activity.platform or "").lower()
         url = str(activity.url or "").lower()
         if "twitch" not in platform and "twitch.tv" not in url:
-            # not a Twitch stream -> remove role if present and do nothing
+            # not a Twitch stream -> finalize any open session and remove role
+            await self._finalize_current_session_if_any(member, activity, channel)
             if role in member.roles:
                 log.debug(
                     "Removing streamrole %s from member %s because stream is not Twitch",
@@ -428,25 +727,52 @@ class StreamRoles(commands.Cog):
                     await self._remove_alert(member, channel)
             return
 
-        # final checks: filter lists and game whitelist
-        has_role = role in member.roles
-        if await self._is_allowed(member):
-            game = activity.game
-            games = await self.conf.guild(member.guild).game_whitelist()
-            if not games or game in games:
-                if not has_role:
-                    log.debug("Adding streamrole %s to member %s", role.id, member.id)
-                    await member.add_roles(role)
-                    if channel:
-                        await self._post_alert(member, activity, game, channel)
-                return
+        # At this point: activity is a Twitch stream
+        # If stats disabled for guild, we still keep role/alerts logic but won't record sessions.
+        was_streaming = bool(await self.conf.member(member).current_stream_start())
+        # If not streaming before, start tracking now
+        if not was_streaming:
+            # record start
+            now = _epoch_now()
+            await self.conf.member(member).current_stream_start.set(now)
+            # optionally also keep metadata for later finalization if desired (game/url/platform)
+            # We won't store metadata in a separate key; we'll keep it in the finalized session.
+            log.debug("Detected Twitch stream start for %s at %s", member.id, now)
+        # add role and post alert if necessary
+        if role not in member.roles:
+            log.debug("Adding streamrole %s to member %s", role.id, member.id)
+            await member.add_roles(role)
+            if channel:
+                await self._post_alert(member, activity, activity.game, channel)
+        # done; do not finalize here
 
-        # if we reach here, they shouldn't have the role
-        if has_role:
-            log.debug("Removing streamrole %s from member %s", role.id, member.id)
-            await member.remove_roles(role)
-            if channel and await self.conf.guild(member.guild).alerts.autodelete():
-                await self._remove_alert(member, channel)
+    async def _finalize_current_session_if_any(self, member: discord.Member, activity, channel):
+        """If member has current_stream_start, finalize it and store session."""
+        start = await self.conf.member(member).current_stream_start()
+        if not start:
+            return
+        end = _epoch_now()
+        duration = max(0, end - start)
+        # fetch last known activity info if available from 'activity' param; fallback to None
+        game = getattr(activity, "game", None) or None
+        platform = getattr(activity, "platform", None) or "Twitch"
+        url = getattr(activity, "url", None) or None
+        session = {
+            "start": start,
+            "end": end,
+            "duration": duration,
+            "game": str(game) if game else None,
+            "platform": str(platform) if platform else None,
+            "url": str(url) if url else None,
+        }
+        # store session (with retention prune)
+        await self._add_session_for_member(member, session, member.guild)
+        # clear current_stream_start
+        await self.conf.member(member).current_stream_start.set(None)
+        log.debug("Finalized session for %s: %s seconds", member.id, duration)
+        # remove alert message if needed
+        if channel and await self.conf.guild(member.guild).alerts.autodelete():
+            await self._remove_alert(member, channel)
 
     async def _update_members_with_role(self, role: discord.Role) -> None:
         streamer_role = await self.get_streamer_role(role.guild)
@@ -483,6 +809,9 @@ class StreamRoles(commands.Cog):
         for member in guild.members:
             await self._update_member(member, streamer_role, alerts_channel)
 
+    # -----------------
+    # Alerts helpers
+    # -----------------
     async def _post_alert(
         self,
         member: discord.Member,
@@ -526,6 +855,9 @@ class StreamRoles(commands.Cog):
         with contextlib.suppress(discord.NotFound):
             await msg.delete()
 
+    # -----------------
+    # Events
+    # -----------------
     @commands.Cog.listener()
     async def on_guild_join(self, guild: discord.Guild) -> None:
         """Update any members when the bot joins a new guild."""
@@ -544,24 +876,48 @@ class StreamRoles(commands.Cog):
         """Update a new member who joins."""
         await self._update_member(member)
 
-    async def _is_allowed(self, member: discord.Member) -> bool:
-        if await self.conf.guild(member.guild).mode() == FilterList.blacklist:
-            return not await self._is_blacklisted(member)
+    # -----------------
+    # Filter helpers (same as original)
+    # -----------------
+    async def _get_filter_list(
+        self, guild: discord.Guild, mode: FilterList
+    ) -> Tuple[List[discord.Member], List[discord.Role]]:
+        all_member_data = await self.conf.all_members(guild)
+        all_role_data = await self.conf.all_roles()
+        mode = mode.as_participle()
+        member_ids = (u for u, d in all_member_data.items() if d.get(mode))
+        role_ids = (u for u, d in all_role_data.items() if d.get(mode))
+        members = list(filter(None, map(guild.get_member, member_ids)))
+        roles = list(filter(None, map(guild.get_role, role_ids)))
+        return members, roles
+
+    async def _update_filter_list_entry(
+        self,
+        member_or_role: Union[discord.Member, discord.Role],
+        filter_list: FilterList,
+        value: bool,
+    ) -> None:
+        if isinstance(member_or_role, discord.Member):
+            await self.conf.member(member_or_role).set_raw(
+                filter_list.as_participle(), value=value
+            )
+            await self._update_member(member_or_role)
         else:
-            return await self._is_whitelisted(member)
+            await self.conf.role(member_or_role).set_raw(
+                filter_list.as_participle(), value=value
+            )
+            await self._update_members_with_role(member_or_role)
 
-    async def _is_whitelisted(self, member: discord.Member) -> bool:
-        if await self.conf.member(member).whitelisted():
-            return True
-        for role in member.roles:
-            if await self.conf.role(role).whitelisted():
-                return True
-        return False
-
-    async def _is_blacklisted(self, member: discord.Member) -> bool:
-        if await self.conf.member(member).blacklisted():
-            return True
-        for role in member.roles:
-            if await self.conf.role(role).blacklisted():
-                return True
-        return False
+    # -----------------
+    # Utils
+    # -----------------
+    @staticmethod
+    def _format_seconds(seconds: int) -> str:
+        seconds = int(seconds)
+        hours, rem = divmod(seconds, 3600)
+        minutes, sec = divmod(rem, 60)
+        if hours:
+            return f"{hours}h {minutes}m"
+        if minutes:
+            return f"{minutes}m {sec}s"
+        return f"{sec}s"
