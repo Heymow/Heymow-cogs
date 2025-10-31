@@ -796,6 +796,8 @@ class StreamRoles(commands.Cog):
                 web.post("/dashboard/proxy/top", self._proxy_handle_top),
                 web.post("/dashboard/proxy/member/{guild_id}/{member_id}", self._proxy_handle_member),
                 web.post("/dashboard/proxy/export/{guild_id}/{member_id}", self._proxy_handle_export),
+                web.post("/dashboard/proxy/heatmap", self._proxy_handle_heatmap),
+                web.post("/dashboard/proxy/all_members", self._proxy_handle_all_members),
                 # Internal local-only API (blocked by middleware)
                 web.get("/api/guild/{guild_id}/member/{member_id}", self._handle_member_stats),
                 web.get("/api/guild/{guild_id}/top", self._handle_top),
@@ -1225,3 +1227,183 @@ class StreamRoles(commands.Cog):
             "Content-Type": "text/csv",
             "Content-Disposition": f'attachment; filename="{member.display_name}-stream-stats-{period}.csv"'
         })
+    async def _proxy_handle_heatmap(self, request: web.Request):
+        """
+        POST JSON: { period } (guild resolved from stored fixed_guild_id or payload guild_id)
+        Returns heatmap data for weekly streaming patterns.
+        """
+        payload = {}
+        if request.content_length:
+            try:
+                payload = await request.json()
+            except Exception:
+                log.exception("Invalid JSON body for /dashboard/proxy/heatmap")
+                payload = {}
+
+        # resolve guild
+        guild = None
+        if payload.get("guild_id"):
+            try:
+                guild = self.bot.get_guild(int(payload.get("guild_id")))
+            except Exception:
+                guild = None
+
+        if guild is None:
+            for g in self.bot.guilds:
+                try:
+                    fixed = await self.conf.guild(g).fixed_guild_id()
+                except Exception:
+                    fixed = None
+                if fixed:
+                    try:
+                        if int(fixed) == g.id:
+                            guild = g
+                            break
+                    except Exception:
+                        guild = g
+                        break
+
+        if not guild:
+            return web.Response(status=400, text="guild_id required or no fixed_guild_id configured")
+
+        token = await self.conf.guild(guild).api_token()
+        if not token:
+            return web.Response(status=403, text="No API token configured for this guild")
+
+        period = payload.get("period", "30d")
+        cutoff = self._parse_period(period)
+        if cutoff is None:
+            return web.Response(status=400, text="Invalid period")
+
+        # Collect all sessions across all members
+        heatmap_data = {}
+        for day in range(7):
+            heatmap_data[day] = {}
+            for hour in range(24):
+                heatmap_data[day][hour] = 0
+
+        for member in guild.members:
+            sessions = await self._get_member_sessions(member, guild)
+            if cutoff:
+                filtered = [s for s in sessions if s.get("start", 0) >= cutoff]
+            else:
+                filtered = sessions
+            
+            for session in filtered:
+                start = session.get("start")
+                if not start:
+                    continue
+                # Convert to time struct
+                dt = time.gmtime(start)
+                day_of_week = (dt.tm_wday + 1) % 7  # Convert Monday=0 to Sunday=0 (Monday->1, Sunday->0)
+                hour = dt.tm_hour
+                heatmap_data[day_of_week][hour] += 1
+
+        # Convert to list format for easier processing in JS
+        result = []
+        for day in range(7):
+            for hour in range(24):
+                result.append({
+                    "day": day,
+                    "hour": hour,
+                    "count": heatmap_data[day][hour]
+                })
+
+        return web.json_response(result)
+
+    async def _proxy_handle_all_members(self, request: web.Request):
+        """
+        POST JSON: { period } (guild resolved from stored fixed_guild_id or payload guild_id)
+        Returns all members with streaming stats and their roles.
+        """
+        payload = {}
+        if request.content_length:
+            try:
+                payload = await request.json()
+            except Exception:
+                log.exception("Invalid JSON body for /dashboard/proxy/all_members")
+                payload = {}
+
+        # resolve guild
+        guild = None
+        if payload.get("guild_id"):
+            try:
+                guild = self.bot.get_guild(int(payload.get("guild_id")))
+            except Exception:
+                guild = None
+
+        if guild is None:
+            for g in self.bot.guilds:
+                try:
+                    fixed = await self.conf.guild(g).fixed_guild_id()
+                except Exception:
+                    fixed = None
+                if fixed:
+                    try:
+                        if int(fixed) == g.id:
+                            guild = g
+                            break
+                    except Exception:
+                        guild = g
+                        break
+
+        if not guild:
+            return web.Response(status=400, text="guild_id required or no fixed_guild_id configured")
+
+        token = await self.conf.guild(guild).api_token()
+        if not token:
+            return web.Response(status=403, text="No API token configured for this guild")
+
+        period = payload.get("period", "30d")
+        cutoff = self._parse_period(period)
+        if cutoff is None:
+            return web.Response(status=400, text="Invalid period")
+
+        # Role name to category mapping
+        role_mapping = {
+            "Seed": "seed",
+            "Sprout": "sprout",
+            "Flower": "flower",
+            "Rosegarden": "rosegarden",
+            "Eden": "eden",
+            "Patrons": "patrons",
+            "Sponsor": "sponsor",
+            "Garden Guardian": "garden_guardian",
+            "Admin": "admin"
+        }
+
+        results = []
+        for member in guild.members:
+            sessions = await self._get_member_sessions(member, guild)
+            if cutoff:
+                filtered = [s for s in sessions if s.get("start", 0) >= cutoff]
+            else:
+                filtered = sessions
+            
+            if not filtered:
+                continue
+
+            # Determine member role
+            member_role = None
+            for role in member.roles:
+                role_name = role.name
+                if role_name in role_mapping:
+                    member_role = role_mapping[role_name]
+                    break
+
+            total_time = sum(s.get("duration", 0) for s in filtered)
+            total_streams = len(filtered)
+            
+            results.append({
+                "member_id": member.id,
+                "display_name": member.display_name,
+                "role": member_role,
+                "total_streams": total_streams,
+                "total_time_seconds": total_time,
+                "total_time_hours": round(total_time / 3600, 2)
+            })
+
+        # Sort by total time descending
+        results.sort(key=lambda x: x["total_time_seconds"], reverse=True)
+
+        return web.json_response(results)
