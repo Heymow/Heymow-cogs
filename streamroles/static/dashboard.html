@@ -322,11 +322,14 @@
     </div>
 
     <footer>
-      <p>© 2024 SoundGarden Stream Stats • Powered by StreamRoles</p>
+      <p id="footerText">© <span id="currentYear"></span> SoundGarden Stream Stats • Powered by StreamRoles</p>
     </footer>
   </div>
 
   <script>
+    // Set current year dynamically
+    document.getElementById('currentYear').textContent = new Date().getFullYear();
+    
     let chartInstance = null;
 
     async function fetchTop() {
