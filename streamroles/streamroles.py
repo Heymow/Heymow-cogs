@@ -3,13 +3,13 @@
 # - public dashboard at /dashboard
 # - public server-side proxy endpoints under /dashboard/proxy/* that use the stored per-guild token from Config
 # - streamrole setapitoken command to store per-guild token server-side
+# - streamrole setfixedguild command to set/clear a fixed guild id in Config at runtime (no redeploy)
 #
 # Notes:
 # - Requires aiohttp available in the runtime (aiohttp>=3.8).
 # - Dashboard remains public; client-side JS calls the proxy endpoints (no client token needed).
 # - /api/* endpoints remain accessible only from localhost (internal) via middleware.
-# - Railway: bind to 0.0.0.0:PORT so dashboard is reachable. Middleware blocks external access to /api/*.
-# - Keep this file as a single module replacement for streamroles/streamroles.py in your repo.
+# - This file expects streamroles/static/dashboard.html to exist; otherwise an embedded fallback is served.
 import asyncio
 import contextlib
 import csv
@@ -66,7 +66,7 @@ class StreamRoles(commands.Cog):
         super().__init__()
         self.bot: Red = bot
         self.conf = Config.get_conf(self, force_registration=True, identifier=UNIQUE_ID)
-        # Guild config (added api_token)
+        # Guild config (added api_token and fixed_guild_id)
         self.conf.register_guild(
             streamer_role=None,
             game_whitelist=[],
@@ -77,7 +77,8 @@ class StreamRoles(commands.Cog):
             required_role=None,
             stats__enabled=True,
             stats__retention_days=365,
-            api_token=None,  # per-guild API token for embedded API
+            api_token=None,        # per-guild API token for embedded API
+            fixed_guild_id=None,   # optional fixed guild id for dashboard proxy (stored per-guild)
         )
         # Member config
         self.conf.register_member(
@@ -98,10 +99,6 @@ class StreamRoles(commands.Cog):
             self._api_port = int(os.environ.get("PORT", os.environ.get("PORT", self.DEFAULT_API_PORT)))
         except Exception:
             self._api_port = self.DEFAULT_API_PORT
-
-        # read fixed guild id from env (optional)
-        guild_id_env = os.environ.get("STREAMROLES_GUILD_ID")
-        self._fixed_guild_id = int(guild_id_env) if guild_id_env and guild_id_env.isdigit() else None
 
         # precompute networks
         self._allowed_nets = [ipaddress.ip_network(c) for c in self._INTERNAL_CIDRS]
@@ -502,6 +499,29 @@ class StreamRoles(commands.Cog):
         await ctx.send("API token stored for this guild on the server. Dashboard proxy will use it. Keep it secret.")
 
     # -----------------
+    # Fixed guild ID management (stored in guild config to avoid redeploy)
+    # -----------------
+    @checks.is_owner()
+    @streamrole.command(name="setfixedguild")
+    async def setfixedguild(self, ctx: commands.Context, guild_id: Optional[str]):
+        """
+        Set or clear the fixed guild id used by the dashboard proxy for this bot instance.
+        Usage:
+         - streamrole setfixedguild <guild_id>  -> sets fixed guild id (numeric) in this guild's config
+         - streamrole setfixedguild none        -> clears the fixed guild id
+        Note: storing fixed_guild_id in a guild's config allows the proxy to find it at runtime without env changes.
+        """
+        if guild_id is None or guild_id.lower() == "none":
+            await self.conf.guild(ctx.guild).fixed_guild_id.set(None)
+            await ctx.send("Cleared fixed guild id for this guild.")
+            return
+        if not guild_id.isdigit():
+            await ctx.send("guild_id must be numeric.")
+            return
+        await self.conf.guild(ctx.guild).fixed_guild_id.set(int(guild_id))
+        await ctx.send(f"Fixed guild id set to {guild_id} for this guild.")
+
+    # -----------------
     # Core helpers
     # -----------------
     async def get_streamer_role(self, guild: discord.Guild) -> Optional[discord.Role]:
@@ -834,7 +854,6 @@ class StreamRoles(commands.Cog):
 
     async def _handle_dashboard(self, request: web.Request):
         # Serve static dashboard file if present in package static/ or the embedded HTML fallback
-        # Attempt to read streamroles/static/dashboard.html from package
         try:
             base = os.path.dirname(__file__)
             static_path = os.path.join(base, "static", "dashboard.html")
@@ -855,19 +874,17 @@ class StreamRoles(commands.Cog):
 <body>
   <h2>StreamRoles - Minimal Dashboard</h2>
   <div id="controls">
-    <label>Guild ID: <input id="guild" /></label>
-    <label><button id="fetchTop">Fetch Top by Time</button></label>
+    <label>Period: <select id="period"><option value="7d">7d</option><option value="30d" selected>30d</option><option value="all">all</option></select></label>
+    <button id="fetchTop">Fetch Top by Time</button>
   </div>
   <canvas id="topChart" width="900" height="350"></canvas>
   <script>
     async function fetchTop() {
-      const guild = document.getElementById('guild').value;
-      const period = '30d';
-      if(!guild){alert('Guild required');return;}
+      const period = document.getElementById('period').value;
       const resp = await fetch('/dashboard/proxy/top', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ guild_id: guild, metric: 'time', period: period, limit: 10 })
+        body: JSON.stringify({ metric: 'time', period: period, limit: 10 })
       });
       if(!resp.ok){ alert('Error: ' + resp.status); return; }
       const data = await resp.json();
@@ -996,35 +1013,61 @@ class StreamRoles(commands.Cog):
     # ---------- Dashboard proxy handlers (public) ----------
     async def _proxy_handle_top(self, request: web.Request):
         """
-        POST JSON: { guild_id, metric, period, limit }
+        POST JSON: { metric, period, limit } (guild resolved from stored fixed_guild_id or payload guild_id)
         Uses server-stored token (api_token in Config) and internal helpers.
         """
-        try:
-            payload = await request.json()
-        except Exception:
-            return web.Response(status=400, text="Invalid JSON")
-        # resolve guild id: prefer fixed env var
-        if self._fixed_guild_id:
-            guild = self.bot.get_guild(self._fixed_guild_id)
-        else:
-            guild_id = payload.get("guild_id")
-            if not guild_id:
-                return web.Response(status=400, text="guild_id required")
-            guild = self.bot.get_guild(int(guild_id))
+        # defensive JSON parse + fallback to {}
+        payload = {}
+        if request.content_length:
+            try:
+                payload = await request.json()
+            except Exception:
+                log.exception("Invalid JSON body for /dashboard/proxy/top")
+                payload = {}
+
+        # resolve guild: prefer payload.guild_id if present; else find the first guild that has fixed_guild_id set in config
+        guild = None
+        if payload.get("guild_id"):
+            try:
+                guild = self.bot.get_guild(int(payload.get("guild_id")))
+            except Exception:
+                guild = None
+
+        if guild is None:
+            # scan guilds for a configured fixed_guild_id (first match)
+            for g in self.bot.guilds:
+                try:
+                    fixed = await self.conf.guild(g).fixed_guild_id()
+                except Exception:
+                    fixed = None
+                if fixed:
+                    # if numeric and matches, use; otherwise still use the guild where it's set
+                    try:
+                        if int(fixed) == g.id:
+                            guild = g
+                            break
+                    except Exception:
+                        guild = g
+                        break
+
         if not guild:
-            return web.Response(status=404, text="Guild not found")
+            return web.Response(status=400, text="guild_id required or no fixed_guild_id configured")
+
         token = await self.conf.guild(guild).api_token()
         if not token:
             return web.Response(status=403, text="No API token configured for this guild")
+
         metric = payload.get("metric", "time")
         period = payload.get("period", "7d")
         try:
             limit = int(payload.get("limit", 10))
         except Exception:
             limit = 10
+
         cutoff = self._parse_period(period)
         if cutoff is None:
             return web.Response(status=400, text="Invalid period")
+
         results = []
         for member in guild.members:
             sessions = await self._get_member_sessions(member, guild)
@@ -1046,21 +1089,43 @@ class StreamRoles(commands.Cog):
         return web.json_response(top)
 
     async def _proxy_handle_member(self, request: web.Request):
-        # prefer env var guild id; else use path param
-        if self._fixed_guild_id:
-            guild = self.bot.get_guild(self._fixed_guild_id)
-            member_id = request.match_info.get("member_id")
-        else:
-            guild = self.bot.get_guild(int(request.match_info.get("guild_id")))
-            member_id = request.match_info.get("member_id")
+        # prefer fixed_guild_id from any configured guild; else use path param guild_id
+        member_id = request.match_info.get("member_id")
+        guild = None
+        # check path param first
+        if request.match_info.get("guild_id"):
+            try:
+                guild = self.bot.get_guild(int(request.match_info.get("guild_id")))
+            except Exception:
+                guild = None
+        if guild is None:
+            for g in self.bot.guilds:
+                try:
+                    fixed = await self.conf.guild(g).fixed_guild_id()
+                except Exception:
+                    fixed = None
+                if fixed:
+                    try:
+                        if int(fixed) == g.id:
+                            guild = g
+                            break
+                    except Exception:
+                        guild = g
+                        break
+
         if not guild:
-            return web.Response(status=404, text="Guild not found")
+            return web.Response(status=400, text="guild_id required or no fixed_guild_id configured")
+
+        if not member_id:
+            return web.Response(status=400, text="member_id required")
         member = guild.get_member(int(member_id))
         if not member:
             return web.Response(status=404, text="Member not found")
+
         token = await self.conf.guild(guild).api_token()
         if not token:
             return web.Response(status=403, text="No API token configured for this guild")
+
         period = "30d"
         if request.content_length:
             try:
@@ -1068,9 +1133,11 @@ class StreamRoles(commands.Cog):
                 period = body.get("period", period)
             except Exception:
                 pass
+
         cutoff = self._parse_period(period)
         if cutoff is None:
             return web.Response(status=400, text="Invalid period")
+
         sessions = await self._get_member_sessions(member, guild)
         if cutoff:
             sessions = [s for s in sessions if s.get("start", 0) >= cutoff]
@@ -1089,20 +1156,41 @@ class StreamRoles(commands.Cog):
         return web.json_response(response)
 
     async def _proxy_handle_export(self, request: web.Request):
-        if self._fixed_guild_id:
-            guild = self.bot.get_guild(self._fixed_guild_id)
-            member_id = request.match_info.get("member_id")
-        else:
-            guild = self.bot.get_guild(int(request.match_info.get("guild_id")))
-            member_id = request.match_info.get("member_id")
+        member_id = request.match_info.get("member_id")
+        guild = None
+        if request.match_info.get("guild_id"):
+            try:
+                guild = self.bot.get_guild(int(request.match_info.get("guild_id")))
+            except Exception:
+                guild = None
+        if guild is None:
+            for g in self.bot.guilds:
+                try:
+                    fixed = await self.conf.guild(g).fixed_guild_id()
+                except Exception:
+                    fixed = None
+                if fixed:
+                    try:
+                        if int(fixed) == g.id:
+                            guild = g
+                            break
+                    except Exception:
+                        guild = g
+                        break
+
         if not guild:
-            return web.Response(status=404, text="Guild not found")
+            return web.Response(status=400, text="guild_id required or no fixed_guild_id configured")
+
+        if not member_id:
+            return web.Response(status=400, text="member_id required")
         member = guild.get_member(int(member_id))
         if not member:
             return web.Response(status=404, text="Member not found")
+
         token = await self.conf.guild(guild).api_token()
         if not token:
             return web.Response(status=403, text="No API token configured for this guild")
+
         period = "all"
         if request.content_length:
             try:
