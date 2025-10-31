@@ -1,3 +1,4 @@
+```html
 <!doctype html>
 <html>
 <head>
@@ -11,11 +12,9 @@
   </style>
 </head>
 <body>
-  <h2>SoundGarden Stream Dashboard</h2>
+  <h2>StreamRoles - Minimal Dashboard</h2>
   <div id="controls">
-    <label>API host: <input id="host" value="" placeholder="leave empty to use same host" /></label>
     <label>Guild ID: <input id="guild" /></label>
-    <label>Token: <input id="token" /></label>
     <label>Period:
       <select id="period"><option value="7d">7d</option><option value="30d" selected>30d</option><option value="all">all</option></select>
     </label>
@@ -23,19 +22,16 @@
   </div>
   <canvas id="topChart" width="900" height="350"></canvas>
   <script>
-    function baseUrl() {
-      const host = document.getElementById('host').value.trim();
-      if (!host) return '';
-      return host.replace(/\/$/, '');
-    }
     async function fetchTop() {
       const guild = document.getElementById('guild').value;
-      const token = document.getElementById('token').value;
       const period = document.getElementById('period').value;
-      if(!guild || !token) { alert('Guild and token required'); return; }
-      const url = `${baseUrl()}/api/guild/${guild}/top?metric=time&period=${period}&limit=10`;
-      const resp = await fetch(url, { headers: { 'Authorization': 'Bearer ' + token }});
-      if(!resp.ok) { alert('Error: ' + resp.status); return; }
+      if(!guild){ alert('Guild required'); return; }
+      const resp = await fetch('/dashboard/proxy/top', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ guild_id: guild, metric: 'time', period: period, limit: 10 })
+      });
+      if(!resp.ok){ alert('Error: ' + resp.status); return; }
       const data = await resp.json();
       const labels = data.map(x => x.display_name);
       const values = data.map(x => x.value_hours);
@@ -51,3 +47,4 @@
   </script>
 </body>
 </html>
+```

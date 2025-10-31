@@ -1,22 +1,20 @@
-"""Module for the StreamRoles cog with streaming statistics support.
-
-This file is the "merged single-file" version: it includes the original StreamRoles
-logic plus a minimal aiohttp-based HTTP API & dashboard embedded in the same cog.
-- The API reuses the cog's internal helpers (notably _get_member_sessions and
-  _format_seconds).
-- Configure per-guild API tokens via the streamrole setapitoken command (added).
-- The server binds to 0.0.0.0 and reads PORT from the environment (Railway compatible).
-- Requires aiohttp available in the runtime environment.
-
-Notes:
-- If aiohttp isn't installed in the environment, installation will fail at load.
-- The API listens on host/port configured via env HOST/PORT (defaults to 0.0.0.0:8080).
-- Security: requests must include header Authorization: Bearer <token> (token set per-guild).
-"""
+# Full merged StreamRoles cog with:
+# - embedded aiohttp API (/api/...) restricted to local-only via middleware
+# - public dashboard at /dashboard
+# - public server-side proxy endpoints under /dashboard/proxy/* that use the stored per-guild token from Config
+# - streamrole setapitoken command to store per-guild token server-side
+#
+# Notes:
+# - Requires aiohttp available in the runtime (aiohttp>=3.8).
+# - Dashboard remains public; client-side JS calls the proxy endpoints (no client token needed).
+# - /api/* endpoints remain accessible only from localhost (internal) via middleware.
+# - Railway: bind to 0.0.0.0:PORT so dashboard is reachable. Middleware blocks external access to /api/*.
+# - Keep this file as a single module replacement for streamroles/streamroles.py in your repo.
 import asyncio
 import contextlib
 import csv
 import io
+import ipaddress
 import logging
 import os
 import time
@@ -61,11 +59,14 @@ class StreamRoles(commands.Cog):
     DEFAULT_API_HOST = "0.0.0.0"
     DEFAULT_API_PORT = 8080
 
+    # local-only CIDRs for internal API access (restricts /api/*)
+    _INTERNAL_CIDRS = ["127.0.0.1/32", "::1/128"]
+
     def __init__(self, bot: Red):
         super().__init__()
         self.bot: Red = bot
         self.conf = Config.get_conf(self, force_registration=True, identifier=UNIQUE_ID)
-        # Guild config
+        # Guild config (added api_token)
         self.conf.register_guild(
             streamer_role=None,
             game_whitelist=[],
@@ -73,14 +74,12 @@ class StreamRoles(commands.Cog):
             alerts__enabled=False,
             alerts__channel=None,
             alerts__autodelete=True,
-            required_role=None,  # ID of role required to be eligible for streamrole
+            required_role=None,
             stats__enabled=True,
-            stats__retention_days=365,  # keep sessions for 1 year by default
+            stats__retention_days=365,
             api_token=None,  # per-guild API token for embedded API
         )
         # Member config
-        # - current_stream_start: epoch seconds when we detected stream start (None if not streaming)
-        # - stream_stats: list of session dicts {start,end,duration,game,platform,url}
         self.conf.register_member(
             blacklisted=False,
             whitelisted=False,
@@ -95,11 +94,13 @@ class StreamRoles(commands.Cog):
         self._api_site = None  # type: Optional[web.TCPSite]
         self._api_app = None  # type: Optional[web.Application]
         self._api_host = os.environ.get("HOST", self.DEFAULT_API_HOST)
-        # Railway exposes PORT; fall back to 8080
         try:
             self._api_port = int(os.environ.get("PORT", os.environ.get("PORT", self.DEFAULT_API_PORT)))
         except Exception:
             self._api_port = self.DEFAULT_API_PORT
+
+        # precompute networks
+        self._allowed_nets = [ipaddress.ip_network(c) for c in self._INTERNAL_CIDRS]
 
     # -----------------
     # Initialization
@@ -119,17 +120,14 @@ class StreamRoles(commands.Cog):
         """Manage settings for StreamRoles."""
         pass
 
-    # --- existing commands (unchanged) ---
     @streamrole.command()
     async def setmode(self, ctx: commands.Context, *, mode: FilterList):
-        """Set the user filter mode to blacklist or whitelist."""
         await self.conf.guild(ctx.guild).mode.set(str(mode))
         await self._update_guild(ctx.guild)
         await ctx.tick()
 
     @streamrole.group(autohelp=True)
     async def whitelist(self, ctx: commands.Context):
-        """Manage the whitelist."""
         pass
 
     @whitelist.command(name="add")
@@ -139,7 +137,6 @@ class StreamRoles(commands.Cog):
         *,
         user_or_role: Union[discord.Member, discord.Role],
     ):
-        """Add a member or role to the whitelist."""
         await self._update_filter_list_entry(user_or_role, FilterList.whitelist, True)
         await ctx.tick()
 
@@ -150,21 +147,17 @@ class StreamRoles(commands.Cog):
         *,
         user_or_role: Union[discord.Member, discord.Role],
     ):
-        """Remove a member or role from the whitelist."""
         await self._update_filter_list_entry(user_or_role, FilterList.whitelist, False)
         await ctx.tick()
 
     @checks.bot_has_permissions(embed_links=True)
     @whitelist.command(name="show")
     async def white_show(self, ctx: commands.Context):
-        """Show the whitelisted members and roles in this server."""
         members, roles = await self._get_filter_list(ctx.guild, FilterList.whitelist)
         if not (members or roles):
             await ctx.send("The whitelist is empty.")
             return
-        embed = discord.Embed(
-            title="StreamRoles Whitelist", colour=await ctx.embed_colour()
-        )
+        embed = discord.Embed(title="StreamRoles Whitelist", colour=await ctx.embed_colour())
         if members:
             embed.add_field(name="Members", value="\n".join(map(str, members)))
         if roles:
@@ -173,7 +166,6 @@ class StreamRoles(commands.Cog):
 
     @streamrole.group(autohelp=True)
     async def blacklist(self, ctx: commands.Context):
-        """Manage the blacklist."""
         pass
 
     @blacklist.command(name="add")
@@ -183,7 +175,6 @@ class StreamRoles(commands.Cog):
         *,
         user_or_role: Union[discord.Member, discord.Role],
     ):
-        """Add a member or role to the blacklist."""
         await self._update_filter_list_entry(user_or_role, FilterList.blacklist, True)
         await ctx.tick()
 
@@ -194,21 +185,17 @@ class StreamRoles(commands.Cog):
         *,
         user_or_role: Union[discord.Member, discord.Role],
     ):
-        """Remove a member or role from the blacklist."""
         await self._update_filter_list_entry(user_or_role, FilterList.blacklist, False)
         await ctx.tick()
 
     @checks.bot_has_permissions(embed_links=True)
     @blacklist.command(name="show")
     async def black_show(self, ctx: commands.Context):
-        """Show the blacklisted members and roles in this server."""
         members, roles = await self._get_filter_list(ctx.guild, FilterList.blacklist)
         if not (members or roles):
             await ctx.send("The blacklist is empty.")
             return
-        embed = discord.Embed(
-            title="StreamRoles Blacklist", colour=await ctx.embed_colour()
-        )
+        embed = discord.Embed(title="StreamRoles Blacklist", colour=await ctx.embed_colour())
         if members:
             embed.add_field(name="Members", value="\n".join(map(str, members)))
         if roles:
@@ -217,17 +204,10 @@ class StreamRoles(commands.Cog):
 
     @streamrole.group(autohelp=True)
     async def games(self, ctx: commands.Context):
-        """Manage the game whitelist.
-
-        Adding games to the whitelist will make the bot only add the streamrole
-        to members streaming those games. If the game whitelist is empty, the
-        game being streamed won't be checked before adding the streamrole.
-        """
         pass
 
     @games.command(name="add")
     async def games_add(self, ctx: commands.Context, *, game: str):
-        """Add a game to the game whitelist."""
         async with self.conf.guild(ctx.guild).game_whitelist() as whitelist:
             whitelist.append(game)
         await self._update_guild(ctx.guild)
@@ -235,7 +215,6 @@ class StreamRoles(commands.Cog):
 
     @games.command(name="remove")
     async def games_remove(self, ctx: commands.Context, *, game: str):
-        """Remove a game from the game whitelist."""
         async with self.conf.guild(ctx.guild).game_whitelist() as whitelist:
             try:
                 whitelist.remove(game)
@@ -248,27 +227,17 @@ class StreamRoles(commands.Cog):
     @checks.bot_has_permissions(embed_links=True)
     @games.command(name="show")
     async def games_show(self, ctx: commands.Context):
-        """Show the game whitelist for this server."""
         whitelist = await self.conf.guild(ctx.guild).game_whitelist()
         if not whitelist:
             await ctx.send("The game whitelist is empty.")
             return
-        embed = discord.Embed(
-            title="StreamRoles Game Whitelist",
-            description="\n".join(whitelist),
-            colour=await ctx.embed_colour(),
-        )
+        embed = discord.Embed(title="StreamRoles Game Whitelist", description="\n".join(whitelist), colour=await ctx.embed_colour())
         await ctx.send(embed=embed)
 
     @games.command(name="clear")
     async def games_clear(self, ctx: commands.Context):
-        """Clear the game whitelist for this server."""
-        msg = await ctx.send(
-            "This will clear the game whitelist for this server. "
-            "Are you sure you want to do this?"
-        )
+        msg = await ctx.send("This will clear the game whitelist for this server. Are you sure you want to do this?")
         menus.start_adding_reactions(msg, predicates.ReactionPredicate.YES_OR_NO_EMOJIS)
-
         pred = predicates.ReactionPredicate.yes_or_no(msg)
         try:
             message = await ctx.bot.wait_for("reaction_add", check=pred)
@@ -287,51 +256,35 @@ class StreamRoles(commands.Cog):
 
     @alerts.command(name="setenabled")
     async def alerts_setenabled(self, ctx: commands.Context, true_or_false: bool):
-        """Enable or disable streamrole alerts."""
         await self.conf.guild(ctx.guild).alerts.enabled.set(true_or_false)
         await ctx.tick()
 
     @alerts.command(name="setchannel")
-    async def alerts_setchannel(
-        self, ctx: commands.Context, channel: discord.TextChannel
-    ):
-        """Set the channel for streamrole alerts."""
+    async def alerts_setchannel(self, ctx: commands.Context, channel: discord.TextChannel):
         await self.conf.guild(ctx.guild).alerts.channel.set(channel.id)
         await ctx.tick()
 
     @alerts.command(name="autodelete")
     async def alerts_autodelete(self, ctx: commands.Context, true_or_false: bool):
-        """Enable or disable alert autodeletion."""
         await self.conf.guild(ctx.guild).alerts.autodelete.set(true_or_false)
         await ctx.tick()
 
     @streamrole.command()
     async def setrole(self, ctx: commands.Context, *, role: discord.Role):
-        """Set the role which is given to streamers."""
         await self.conf.guild(ctx.guild).streamer_role.set(role.id)
-        await ctx.send(
-            "Done. Streamers will now be given the {} role when "
-            "they go live.".format(role.name)
-        )
+        await ctx.send("Done. Streamers will now be given the {} role when they go live.".format(role.name))
 
     @streamrole.command()
     async def setrequiredrole(self, ctx: commands.Context, *, role: str):
-        """Set a role required to be eligible for the streamrole.
-
-        Pass a role mention, exact name, or ID to require it. Pass 'none' to disable the requirement.
-        """
         if role.lower() == "none":
             await self.conf.guild(ctx.guild).required_role.set(None)
             await ctx.send("Disabled required role. Any eligible member can now receive the streamrole.")
             await self._update_guild(ctx.guild)
             return
-
-        # Try to resolve a mention or ID first
         resolved = None
         if role.isdigit():
             resolved = ctx.guild.get_role(int(role))
         if resolved is None:
-            # check mention format <@&id>
             if role.startswith("<@&") and role.endswith(">"):
                 try:
                     rid = int(role[3:-1])
@@ -339,22 +292,18 @@ class StreamRoles(commands.Cog):
                 except ValueError:
                     resolved = None
         if resolved is None:
-            # fallback to name match (case-sensitive exact), then case-insensitive
             resolved = discord.utils.find(lambda r: r.name == role, ctx.guild.roles)
             if resolved is None:
                 resolved = discord.utils.find(lambda r: r.name.lower() == role.lower(), ctx.guild.roles)
-
         if resolved is None:
             await ctx.send("Rôle introuvable. Utilise une mention, le nom exact, ou l'ID, ou 'none' pour désactiver.")
             return
-
         await self.conf.guild(ctx.guild).required_role.set(resolved.id)
         await ctx.send(f"Set required role: {resolved.name}. Only members with this role can receive the streamrole.")
         await self._update_guild(ctx.guild)
 
     @streamrole.command()
     async def setstatsretention(self, ctx: commands.Context, days: int):
-        """Set how many days to retain stream session stats (admin only)."""
         if days < 1:
             await ctx.send("Retention must be at least 1 day.")
             return
@@ -364,21 +313,14 @@ class StreamRoles(commands.Cog):
 
     @streamrole.command()
     async def togglestats(self, ctx: commands.Context, enabled: bool):
-        """Enable or disable collection of streaming stats for this guild."""
         await self.conf.guild(ctx.guild).stats.enabled.set(enabled)
         await ctx.send(f"Streaming stats collection {'enabled' if enabled else 'disabled'}.")
-        await self._update_guild(ctx.guild)
 
     @streamrole.command()
     async def forceupdate(self, ctx: commands.Context):
-        """Force the bot to reassign streamroles to members in this server."""
         if not await self.get_streamer_role(ctx.guild):
-            await ctx.send(
-                f"The streamrole has not been set in this server. Please use "
-                f"`{ctx.clean_prefix}streamrole setrole` first."
-            )
+            await ctx.send(f"The streamrole has not been set in this server. Please use `{ctx.clean_prefix}streamrole setrole` first.")
             return
-
         await self._update_guild(ctx.guild)
         await ctx.tick()
 
@@ -387,27 +329,19 @@ class StreamRoles(commands.Cog):
     # -----------------
     @streamrole.group()
     async def stats(self, ctx: commands.Context):
-        """Streaming statistics commands (stats, export, top)."""
         pass
 
     @stats.command(name="show")
-    async def stats_show(
-        self, ctx: commands.Context, member: Optional[discord.Member] = None, period: str = "30d"
-    ):
-        """
-        Show stats for a member.
-        """
+    async def stats_show(self, ctx: commands.Context, member: Optional[discord.Member] = None, period: str = "30d"):
         member = member or ctx.author
         guild = ctx.guild
         if not await self.conf.guild(guild).stats.enabled():
             await ctx.send("Stats collection is disabled on this server.")
             return
-
         sessions = await self._get_member_sessions(member, guild)
         if not sessions:
             await ctx.send(f"No streaming sessions recorded for {member.mention}.")
             return
-
         now = _epoch_now()
         if period.endswith("d"):
             try:
@@ -424,12 +358,9 @@ class StreamRoles(commands.Cog):
         else:
             await ctx.send("Period must be like '7d', '30d', or 'all'.")
             return
-
         total_streams = len(filtered)
         total_time = sum(s.get("duration", 0) for s in filtered)
         avg_duration = total_time / total_streams if total_streams else 0
-
-        # average per week / per month over the period considered
         if period == "all":
             first = min(s["start"] for s in sessions)
             days_span = max(1, (now - first) / 86400)
@@ -440,45 +371,27 @@ class StreamRoles(commands.Cog):
                 days_span = 1
         weeks = max(1, days_span / 7.0)
         months = max(1, days_span / 30.44)
-
         per_week = total_streams / weeks
         per_month = total_streams / months
-
-        embed = discord.Embed(
-            title=f"Streaming stats for {member.display_name}",
-            description=f"Period: {period_label}\n",
-            colour=await ctx.embed_colour(),
-        )
+        embed = discord.Embed(title=f"Streaming stats for {member.display_name}", description=f"Period: {period_label}\n", colour=await ctx.embed_colour())
         embed.add_field(name="Total streams", value=str(total_streams), inline=True)
-        embed.add_field(
-            name="Total time", value=self._format_seconds(total_time), inline=True
-        )
-        embed.add_field(
-            name="Average duration", value=self._format_seconds(int(avg_duration)), inline=True
-        )
+        embed.add_field(name="Total time", value=self._format_seconds(total_time), inline=True)
+        embed.add_field(name="Average duration", value=self._format_seconds(int(avg_duration)), inline=True)
         embed.add_field(name="Avg streams / week", value=f"{per_week:.2f}", inline=True)
         embed.add_field(name="Avg streams / month", value=f"{per_month:.2f}", inline=True)
-
         await ctx.send(embed=embed)
 
     @stats.command(name="export")
-    async def stats_export(
-        self, ctx: commands.Context, member: Optional[discord.Member] = None, period: str = "all"
-    ):
-        """
-        Export sessions as CSV.
-        """
+    async def stats_export(self, ctx: commands.Context, member: Optional[discord.Member] = None, period: str = "all"):
         member = member or ctx.author
         guild = ctx.guild
         if not await self.conf.guild(guild).stats.enabled():
             await ctx.send("Stats collection is disabled on this server.")
             return
-
         sessions = await self._get_member_sessions(member, guild)
         if not sessions:
             await ctx.send("No sessions to export.")
             return
-
         now = _epoch_now()
         if period.endswith("d"):
             try:
@@ -493,8 +406,6 @@ class StreamRoles(commands.Cog):
         else:
             await ctx.send("Period must be like '7d', '30d', or 'all'.")
             return
-
-        # build CSV in-memory
         buf = io.StringIO()
         writer = csv.writer(buf)
         writer.writerow(["start_iso", "end_iso", "start_epoch", "end_epoch", "duration_seconds", "game", "platform", "url"])
@@ -517,16 +428,7 @@ class StreamRoles(commands.Cog):
         await ctx.send(file=discord.File(fp=data, filename=fname))
 
     @stats.command(name="top")
-    async def stats_top(
-        self,
-        ctx: commands.Context,
-        metric: str = "time",
-        period: str = "7d",
-        limit: int = 10,
-    ):
-        """
-        Show top N streamers in the guild.
-        """
+    async def stats_top(self, ctx: commands.Context, metric: str = "time", period: str = "7d", limit: int = 10):
         guild = ctx.guild
         if limit < 1:
             await ctx.send("Limit must be at least 1.")
@@ -538,19 +440,15 @@ class StreamRoles(commands.Cog):
         if period not in ("7d", "30d", "all", "30d"):
             await ctx.send("Period must be '7d', '30d', or 'all'.")
             return
-
         if not await self.conf.guild(guild).stats.enabled():
             await ctx.send("Stats collection is disabled on this server.")
             return
-
         now = _epoch_now()
         if period.endswith("d"):
             days = int(period[:-1])
             cutoff = now - _days_to_seconds(days)
         else:
             cutoff = 0
-
-        # scan members, collect metric per member
         results = []
         retention_days = await self.conf.guild(guild).stats.retention_days()
         for member in guild.members:
@@ -565,56 +463,44 @@ class StreamRoles(commands.Cog):
             else:
                 val = len(filtered)
             results.append((member, val))
-
-        # sort descending
         results.sort(key=lambda x: x[1], reverse=True)
         top = results[:limit]
-
         if not top:
             await ctx.send("No data for the requested period.")
             return
-
-        embed = discord.Embed(
-            title=f"Top {len(top)} streamers by {'time' if metric=='time' else 'streams'} ({period})",
-            colour=await ctx.embed_colour(),
-        )
+        embed = discord.Embed(title=f"Top {len(top)} streamers by {'time' if metric=='time' else 'streams'} ({period})", colour=await ctx.embed_colour())
         for idx, (member, val) in enumerate(top, start=1):
             if metric == "time":
                 value_str = self._format_seconds(val)
             else:
                 value_str = str(val)
-            embed.add_field(
-                name=f"{idx}. {member.display_name}",
-                value=value_str,
-                inline=False,
-            )
-
+            embed.add_field(name=f"{idx}. {member.display_name}", value=value_str, inline=False)
         await ctx.send(embed=embed)
 
     # -----------------
-    # API management commands
+    # API management command (server-side token)
     # -----------------
-    @commands.is_owner()
+    @checks.is_owner()
     @streamrole.command(name="setapitoken")
     async def setapitoken(self, ctx: commands.Context, token: Optional[str]):
         """
-        Set or clear the API token for this guild.
+        Set or clear the API token for this guild (server-side).
         Usage:
-         - streamrole setapitoken <token>   -> sets the token
+         - streamrole setapitoken <token>   -> sets the token for guild
          - streamrole setapitoken none      -> clears the token
+        Note: owner-only by default; change decorator if you want admins to set tokens.
         """
         if token is None or token.lower() == "none":
             await self.conf.guild(ctx.guild).api_token.set(None)
-            await ctx.send("Cleared API token for this guild. The API will not accept requests for this guild until a token is set.")
+            await ctx.send("Cleared API token for this guild. The dashboard proxy will not serve data for this guild until a token is set.")
             return
         await self.conf.guild(ctx.guild).api_token.set(token)
-        await ctx.send("API token stored for this guild. Keep it secret.")
+        await ctx.send("API token stored for this guild on the server. Dashboard proxy will use it. Keep it secret.")
 
     # -----------------
     # Core helpers
     # -----------------
     async def get_streamer_role(self, guild: discord.Guild) -> Optional[discord.Role]:
-        """Get the streamrole for this guild."""
         role_id = await self.conf.guild(guild).streamer_role()
         if not role_id:
             return
@@ -625,17 +511,13 @@ class StreamRoles(commands.Cog):
         else:
             return role
 
-    async def get_alerts_channel(
-        self, guild: discord.Guild
-    ) -> Optional[discord.TextChannel]:
-        """Get the alerts channel for this guild."""
+    async def get_alerts_channel(self, guild: discord.Guild) -> Optional[discord.TextChannel]:
         alerts_data = await self.conf.guild(guild).alerts.all()
         if not alerts_data["enabled"]:
             return
         return guild.get_channel(alerts_data["channel"])
 
     async def get_required_role(self, guild: discord.Guild) -> Optional[discord.Role]:
-        """Return the Role that is required for eligibility, or None."""
         role_id = await self.conf.guild(guild).required_role()
         if not role_id:
             return None
@@ -645,27 +527,20 @@ class StreamRoles(commands.Cog):
     # Session storage helpers
     # -----------------
     async def _get_member_sessions(self, member: discord.Member, guild: discord.Guild) -> List[dict]:
-        """Return the member's stream session list (sorted by start asc)."""
         data = await self.conf.member(member).stream_stats()
-        # Ensure list type
         if not isinstance(data, list):
             return []
-        # Remove any malformed items
         sessions = [s for s in data if isinstance(s, dict) and "start" in s]
         sessions.sort(key=lambda s: s.get("start", 0))
         return sessions
 
-    async def _add_session_for_member(
-        self, member: discord.Member, session: dict, guild: discord.Guild
-    ):
-        """Append a session and apply retention prune."""
+    async def _add_session_for_member(self, member: discord.Member, session: dict, guild: discord.Guild):
         if not await self.conf.guild(guild).stats.enabled():
             return
         retention_days = await self.conf.guild(guild).stats.retention_days()
         cutoff = _epoch_now() - _days_to_seconds(retention_days)
         async with self.conf.member(member).stream_stats() as lst:
             lst.append(session)
-            # prune old sessions (in-place)
             pruned = [s for s in lst if s.get("start", 0) >= cutoff]
             lst.clear()
             lst.extend(pruned)
@@ -673,102 +548,60 @@ class StreamRoles(commands.Cog):
 
     # -----------------
     # Presence / session detection and main logic
+    # (unchanged from original)
     # -----------------
-    async def _update_member(
-        self,
-        member: discord.Member,
-        role: Optional[discord.Role] = None,
-        alerts_channel: Optional[discord.TextChannel] = _alerts_channel_sentinel,
-    ) -> None:
+    async def _update_member(self, member: discord.Member, role: Optional[discord.Role] = None, alerts_channel: Optional[discord.TextChannel] = _alerts_channel_sentinel) -> None:
         role = role or await self.get_streamer_role(member.guild)
         if role is None:
             return
-
-        channel = (
-            alerts_channel
-            if alerts_channel is not _alerts_channel_sentinel
-            else await self.get_alerts_channel(member.guild)
-        )
-
-        # If a required role is configured, check it here.
+        channel = alerts_channel if alerts_channel is not _alerts_channel_sentinel else await self.get_alerts_channel(member.guild)
         required = await self.get_required_role(member.guild)
         if required is not None and required not in member.roles:
-            # member doesn't have required role -> remove streamrole if present and stop tracking
             if role in member.roles:
-                log.debug(
-                    "Removing streamrole %s from member %s because they lack required role %s",
-                    role.id,
-                    member.id,
-                    required.id,
-                )
+                log.debug("Removing streamrole %s from member %s because they lack required role %s", role.id, member.id, required.id)
                 await member.remove_roles(role)
                 if channel and await self.conf.guild(member.guild).alerts.autodelete():
                     await self._remove_alert(member, channel)
-            # also, if there's an ongoing streaming "current_stream_start", close it
             current_start = await self.conf.member(member).current_stream_start()
             if current_start:
-                # close session without recording (since requirement not met)
                 await self.conf.member(member).current_stream_start.set(None)
             return
-
-        # find the first Streaming activity
-        activity = next(
-            (a for a in member.activities if isinstance(a, discord.Streaming)),
-            None,
-        )
-
-        # if no activity or no platform -> treat as not streaming
+        activity = next((a for a in member.activities if isinstance(a, discord.Streaming)), None)
         if activity is None or not getattr(activity, "platform", None):
-            # if we had a current_stream_start, finalize session
             await self._finalize_current_session_if_any(member, activity, channel)
-            # remove role if present (standard behavior)
             if role in member.roles:
                 log.debug("Removing streamrole %s from member %s", role.id, member.id)
                 await member.remove_roles(role)
                 if channel and await self.conf.guild(member.guild).alerts.autodelete():
                     await self._remove_alert(member, channel)
             return
-
-        # ensure platform/url indicate Twitch only
         platform = str(getattr(activity, "platform", "") or "").lower()
         url = str(getattr(activity, "url", "") or "").lower()
         if "twitch" not in platform and "twitch.tv" not in url:
-            # not a Twitch stream -> finalize any open session and remove role
             await self._finalize_current_session_if_any(member, activity, channel)
             if role in member.roles:
-                log.debug(
-                    "Removing streamrole %s from member %s because stream is not Twitch",
-                    role.id,
-                    member.id,
-                )
+                log.debug("Removing streamrole %s from member %s because stream is not Twitch", role.id, member.id)
                 await member.remove_roles(role)
                 if channel and await self.conf.guild(member.guild).alerts.autodelete():
                     await self._remove_alert(member, channel)
             return
-
-        # At this point: activity is a Twitch stream
         was_streaming = bool(await self.conf.member(member).current_stream_start())
-        # If not streaming before, start tracking now
         if not was_streaming:
             now = _epoch_now()
             await self.conf.member(member).current_stream_start.set(now)
             log.debug("Detected Twitch stream start for %s at %s", member.id, now)
-        # add role and post alert if necessary
         if role not in member.roles:
             log.debug("Adding streamrole %s to member %s", role.id, member.id)
             await member.add_roles(role)
             if channel:
                 await self._post_alert(member, activity, getattr(activity, "game", None), channel)
-        # done; do not finalize here
 
     async def _finalize_current_session_if_any(self, member: discord.Member, activity, channel):
-        """If member has current_stream_start, finalize it and store session."""
         start = await self.conf.member(member).current_stream_start()
         if not start:
             return
         end = _epoch_now()
         duration = max(0, end - start)
-        # fetch last known activity info if available from 'activity' param; fallback to None
         game = getattr(activity, "game", None) or None
         platform = getattr(activity, "platform", None) or "Twitch"
         url = getattr(activity, "url", None) or None
@@ -780,12 +613,9 @@ class StreamRoles(commands.Cog):
             "platform": str(platform) if platform else None,
             "url": str(url) if url else None,
         }
-        # store session (with retention prune)
         await self._add_session_for_member(member, session, member.guild)
-        # clear current_stream_start
         await self.conf.member(member).current_stream_start.set(None)
         log.debug("Finalized session for %s: %s seconds", member.id, duration)
-        # remove alert message if needed
         if channel and await self.conf.guild(member.guild).alerts.autodelete():
             await self._remove_alert(member, channel)
 
@@ -793,23 +623,12 @@ class StreamRoles(commands.Cog):
         streamer_role = await self.get_streamer_role(role.guild)
         if streamer_role is None:
             return
-
         alerts_channel = await self.get_alerts_channel(role.guild)
-
         if await self.conf.guild(role.guild).mode() == FilterList.blacklist:
             for member in role.members:
                 if streamer_role in member.roles:
-                    log.debug(
-                        "Removing streamrole %s from member %s after role %s was "
-                        "blacklisted",
-                        streamer_role.id,
-                        member.id,
-                        role.id,
-                    )
-                    await member.remove_roles(
-                        streamer_role,
-                        reason=f"Removing streamrole after {role} role was blacklisted",
-                    )
+                    log.debug("Removing streamrole %s from member %s after role %s was blacklisted", streamer_role.id, member.id, role.id)
+                    await member.remove_roles(streamer_role, reason=f"Removing streamrole after {role} role was blacklisted")
         else:
             for member in role.members:
                 await self._update_member(member, streamer_role, alerts_channel)
@@ -818,55 +637,34 @@ class StreamRoles(commands.Cog):
         streamer_role = await self.get_streamer_role(guild)
         if streamer_role is None:
             return
-
         alerts_channel = await self.get_alerts_channel(guild)
-
         for member in guild.members:
             await self._update_member(member, streamer_role, alerts_channel)
 
     # -----------------
     # Alerts helpers
     # -----------------
-    async def _post_alert(
-        self,
-        member: discord.Member,
-        activity: discord.Streaming,
-        game: Optional[str],
-        channel: discord.TextChannel,
-    ) -> discord.Message:
-        content = (
-            f"{chatutils.bold(member.display_name)} is now live on {activity.platform}"
-        )
+    async def _post_alert(self, member: discord.Member, activity: discord.Streaming, game: Optional[str], channel: discord.TextChannel) -> discord.Message:
+        content = f"{chatutils.bold(member.display_name)} is now live on {activity.platform}"
         if game is not None:
             content += f", playing {chatutils.italics(str(game))}"
-        content += (
-            f"!\n\nTitle: {chatutils.italics(activity.name)}\nURL: {activity.url}"
-        )
-
+        content += f"!\n\nTitle: {chatutils.italics(activity.name)}\nURL: {activity.url}"
         msg = await channel.send(content)
-        await self.conf.member(member).alert_messages.set_raw(
-            str(channel.id), value=msg.id
-        )
+        await self.conf.member(member).alert_messages.set_raw(str(channel.id), value=msg.id)
         return msg
 
-    async def _remove_alert(
-        self, member: discord.Member, channel: discord.TextChannel
-    ) -> None:
+    async def _remove_alert(self, member: discord.Member, channel: discord.TextChannel) -> None:
         conf_group = self.conf.member(member).alert_messages
         msg_id = await conf_group.get_raw(str(channel.id), default=None)
         if msg_id is None:
             return
         await conf_group.clear_raw(str(channel.id))
-
-        msg: Optional[discord.Message] = discord.utils.get(
-            getattr(self.bot, "cached_messages", ()), id=msg_id
-        )
+        msg: Optional[discord.Message] = discord.utils.get(getattr(self.bot, "cached_messages", ()), id=msg_id)
         if msg is None:
             try:
                 msg = await channel.fetch_message(msg_id)
             except discord.NotFound:
                 return
-
         with contextlib.suppress(discord.NotFound):
             await msg.delete()
 
@@ -875,28 +673,21 @@ class StreamRoles(commands.Cog):
     # -----------------
     @commands.Cog.listener()
     async def on_guild_join(self, guild: discord.Guild) -> None:
-        """Update any members when the bot joins a new guild."""
         await self._update_guild(guild)
 
     @commands.Cog.listener()
-    async def on_presence_update(
-        self, before: discord.Member, after: discord.Member
-    ) -> None:
-        """Apply or remove the streamrole when a user's activity changes."""
+    async def on_presence_update(self, before: discord.Member, after: discord.Member) -> None:
         if before.activities != after.activities:
             await self._update_member(after)
 
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member) -> None:
-        """Update a new member who joins."""
         await self._update_member(member)
 
     # -----------------
-    # Filter helpers (same as original)
+    # Filter helpers
     # -----------------
-    async def _get_filter_list(
-        self, guild: discord.Guild, mode: FilterList
-    ) -> Tuple[List[discord.Member], List[discord.Role]]:
+    async def _get_filter_list(self, guild: discord.Guild, mode: FilterList) -> Tuple[List[discord.Member], List[discord.Role]]:
         all_member_data = await self.conf.all_members(guild)
         all_role_data = await self.conf.all_roles()
         mode = mode.as_participle()
@@ -906,26 +697,14 @@ class StreamRoles(commands.Cog):
         roles = list(filter(None, map(guild.get_role, role_ids)))
         return members, roles
 
-    async def _update_filter_list_entry(
-        self,
-        member_or_role: Union[discord.Member, discord.Role],
-        filter_list: FilterList,
-        value: bool,
-    ) -> None:
+    async def _update_filter_list_entry(self, member_or_role: Union[discord.Member, discord.Role], filter_list: FilterList, value: bool) -> None:
         if isinstance(member_or_role, discord.Member):
-            await self.conf.member(member_or_role).set_raw(
-                filter_list.as_participle(), value=value
-            )
+            await self.conf.member(member_or_role).set_raw(filter_list.as_participle(), value=value)
             await self._update_member(member_or_role)
         else:
-            await self.conf.role(member_or_role).set_raw(
-                filter_list.as_participle(), value=value
-            )
+            await self.conf.role(member_or_role).set_raw(filter_list.as_participle(), value=value)
             await self._update_members_with_role(member_or_role)
 
-    # -----------------
-    # Utils
-    # -----------------
     @staticmethod
     def _format_seconds(seconds: int) -> str:
         seconds = int(seconds)
@@ -942,7 +721,6 @@ class StreamRoles(commands.Cog):
     # -----------------
     async def cog_load(self) -> None:
         """Start aiohttp app when cog is loaded. Also call initialize if present."""
-        # call existing initialization if present (non-blocking)
         with contextlib.suppress(Exception):
             init = getattr(self, "initialize", None)
             if init is not None:
@@ -950,27 +728,54 @@ class StreamRoles(commands.Cog):
                     await init()
                 except Exception:
                     log.exception("Error during StreamRoles.initialize()")
-        # start API if aiohttp available
         if aiohttp is None or web is None:
             log.info("aiohttp not available; embedded API disabled.")
             return
         await self._start_api()
 
     async def cog_unload(self) -> None:
-        """Stop aiohttp app when cog is unloaded."""
         await self._stop_api()
+
+    def _client_ip_allowed(self, ip_str: str) -> bool:
+        try:
+            ip = ipaddress.ip_address(ip_str)
+        except Exception:
+            return False
+        return any(ip in net for net in self._allowed_nets)
+
+    def _make_local_only_middleware(self):
+        @web.middleware
+        async def local_only_middleware(request, handler):
+            path = request.rel_url.path
+            # restrict only /api/* endpoints
+            if path.startswith("/api/"):
+                xff = request.headers.get("X-Forwarded-For")
+                if xff:
+                    client_ip = xff.split(",")[0].strip()
+                else:
+                    peer = request.transport.get_extra_info("peername")
+                    client_ip = peer[0] if peer else None
+                if not client_ip or not self._client_ip_allowed(client_ip):
+                    return web.Response(status=403, text="Forbidden")
+            return await handler(request)
+        return local_only_middleware
 
     async def _start_api(self):
         if self._api_runner:
             return
-        app = web.Application()
+        app = web.Application(middlewares=[self._make_local_only_middleware()])
+        # Public dashboard + proxy routes (public)
         app.add_routes(
             [
+                web.get("/", self._handle_index),
+                web.get("/dashboard", self._handle_dashboard),
+                web.post("/dashboard/proxy/top", self._proxy_handle_top),
+                web.post("/dashboard/proxy/member/{guild_id}/{member_id}", self._proxy_handle_member),
+                web.post("/dashboard/proxy/export/{guild_id}/{member_id}", self._proxy_handle_export),
+                # Internal local-only API (blocked by middleware)
                 web.get("/api/guild/{guild_id}/member/{member_id}", self._handle_member_stats),
                 web.get("/api/guild/{guild_id}/top", self._handle_top),
                 web.get("/api/guild/{guild_id}/export/member/{member_id}", self._handle_export_csv),
-                web.get("/dashboard", self._handle_dashboard),
-                web.get("/", self._handle_index),
             ]
         )
         runner = web.AppRunner(app)
@@ -995,13 +800,11 @@ class StreamRoles(commands.Cog):
                 self._api_app = None
 
     async def _authorize(self, request: web.Request, guild_id: int) -> bool:
-        """Simple header token auth. Returns True if authorized."""
         guild = self.bot.get_guild(int(guild_id))
         if guild is None:
             return False
         token = await self.conf.guild(guild).api_token()
         if not token:
-            # if no token set, we consider the API disabled for this guild
             return False
         header = request.headers.get("Authorization", "")
         if header.startswith("Bearer "):
@@ -1010,7 +813,6 @@ class StreamRoles(commands.Cog):
         return False
 
     def _parse_period(self, period: str):
-        """Return cutoff epoch for period or 0 for all."""
         now = int(time.time())
         if not period or period == "all":
             return 0
@@ -1022,12 +824,21 @@ class StreamRoles(commands.Cog):
             return now - int(days) * 86400
         return None
 
-    # ---------- API handlers ----------
+    # ---------- API handlers (internal, local-only) ----------
     async def _handle_index(self, request: web.Request):
         return web.Response(text="StreamRoles API is running.", content_type="text/plain")
 
     async def _handle_dashboard(self, request: web.Request):
-        """Serve embedded frontend HTML/JS (minimal)."""
+        # Serve static dashboard file if present in package static/ or the embedded HTML fallback
+        # Attempt to read streamroles/static/dashboard.html from package
+        try:
+            base = os.path.dirname(__file__)
+            static_path = os.path.join(base, "static", "dashboard.html")
+            if os.path.exists(static_path):
+                return web.FileResponse(path=static_path)
+        except Exception:
+            pass
+        # fallback embedded HTML (minimal)
         html = """
 <!doctype html>
 <html>
@@ -1035,32 +846,26 @@ class StreamRoles(commands.Cog):
   <meta charset="utf-8"/>
   <title>StreamRoles Dashboard</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <style>
-    body { font-family: Arial, sans-serif; margin: 20px; }
-    input, select { margin: 5px; }
-    #controls { margin-bottom: 10px; }
-  </style>
+  <style>body{font-family:Arial;margin:20px}input,select{margin:5px}#controls{margin-bottom:10px}</style>
 </head>
 <body>
   <h2>StreamRoles - Minimal Dashboard</h2>
   <div id="controls">
     <label>Guild ID: <input id="guild" /></label>
-    <label>Token: <input id="token" /></label>
-    <label>Period:
-      <select id="period"><option value="7d">7d</option><option value="30d" selected>30d</option><option value="all">all</option></select>
-    </label>
-    <button id="fetchTop">Fetch Top by Time</button>
+    <label><button id="fetchTop">Fetch Top by Time</button></label>
   </div>
   <canvas id="topChart" width="900" height="350"></canvas>
   <script>
     async function fetchTop() {
       const guild = document.getElementById('guild').value;
-      const token = document.getElementById('token').value;
-      const period = document.getElementById('period').value;
-      if(!guild || !token) { alert('Guild and token required'); return; }
-      const url = `/api/guild/${guild}/top?metric=time&period=${period}&limit=10`;
-      const resp = await fetch(url, { headers: { 'Authorization': 'Bearer ' + token }});
-      if(!resp.ok) { alert('Error: ' + resp.status); return; }
+      const period = '30d';
+      if(!guild){alert('Guild required');return;}
+      const resp = await fetch('/dashboard/proxy/top', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ guild_id: guild, metric: 'time', period: period, limit: 10 })
+      });
+      if(!resp.ok){ alert('Error: ' + resp.status); return; }
       const data = await resp.json();
       const labels = data.map(x => x.display_name);
       const values = data.map(x => x.value_hours);
@@ -1162,7 +967,140 @@ class StreamRoles(commands.Cog):
         sessions = await self._get_member_sessions(member, guild)
         if cutoff:
             sessions = [s for s in sessions if s.get("start", 0) >= cutoff]
-        # build CSV in-memory
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(["start_iso", "end_iso", "start_epoch", "end_epoch", "duration_seconds", "game", "platform", "url"])
+        for s in sessions:
+            start = s.get("start")
+            end = s.get("end")
+            writer.writerow([
+                time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(start)) if start else "",
+                time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(end)) if end else "",
+                start or "",
+                end or "",
+                s.get("duration", ""),
+                s.get("game", "") or "",
+                s.get("platform", "") or "",
+                s.get("url", "") or "",
+            ])
+        data = buf.getvalue().encode("utf-8")
+        return web.Response(body=data, headers={
+            "Content-Type": "text/csv",
+            "Content-Disposition": f'attachment; filename="{member.display_name}-stream-stats-{period}.csv"'
+        })
+
+    # ---------- Dashboard proxy handlers (public) ----------
+    async def _proxy_handle_top(self, request: web.Request):
+        """
+        POST JSON: { guild_id, metric, period, limit }
+        Uses server-stored token (api_token in Config) and internal helpers.
+        """
+        try:
+            payload = await request.json()
+        except Exception:
+            return web.Response(status=400, text="Invalid JSON")
+        guild_id = payload.get("guild_id")
+        if not guild_id:
+            return web.Response(status=400, text="guild_id required")
+        guild = self.bot.get_guild(int(guild_id)) if guild_id else None
+        if not guild:
+            return web.Response(status=404, text="Guild not found")
+        token = await self.conf.guild(guild).api_token()
+        if not token:
+            return web.Response(status=403, text="No API token configured for this guild")
+        metric = payload.get("metric", "time")
+        period = payload.get("period", "7d")
+        try:
+            limit = int(payload.get("limit", 10))
+        except Exception:
+            limit = 10
+        cutoff = self._parse_period(period)
+        if cutoff is None:
+            return web.Response(status=400, text="Invalid period")
+        results = []
+        for member in guild.members:
+            sessions = await self._get_member_sessions(member, guild)
+            if cutoff:
+                filtered = [s for s in sessions if s.get("start", 0) >= cutoff]
+            else:
+                filtered = sessions
+            if not filtered:
+                continue
+            if metric == "time":
+                val_sec = sum(s.get("duration", 0) for s in filtered)
+            else:
+                val_sec = len(filtered)
+            results.append({"member_id": member.id, "display_name": member.display_name, "value": val_sec})
+        results.sort(key=lambda x: x["value"], reverse=True)
+        top = results[:limit]
+        for r in top:
+            r["value_hours"] = round(r["value"] / 3600, 2) if metric == "time" else r["value"]
+        return web.json_response(top)
+
+    async def _proxy_handle_member(self, request: web.Request):
+        guild_id = request.match_info.get("guild_id")
+        member_id = request.match_info.get("member_id")
+        guild = self.bot.get_guild(int(guild_id)) if guild_id else None
+        if not guild:
+            return web.Response(status=404, text="Guild not found")
+        member = guild.get_member(int(member_id))
+        if not member:
+            return web.Response(status=404, text="Member not found")
+        token = await self.conf.guild(guild).api_token()
+        if not token:
+            return web.Response(status=403, text="No API token configured for this guild")
+        period = "30d"
+        if request.content_length:
+            try:
+                body = await request.json()
+                period = body.get("period", period)
+            except Exception:
+                pass
+        cutoff = self._parse_period(period)
+        if cutoff is None:
+            return web.Response(status=400, text="Invalid period")
+        sessions = await self._get_member_sessions(member, guild)
+        if cutoff:
+            sessions = [s for s in sessions if s.get("start", 0) >= cutoff]
+        total_streams = len(sessions)
+        total_time = sum(s.get("duration", 0) for s in sessions)
+        avg_duration = total_time / total_streams if total_streams else 0
+        response = {
+            "member_id": member.id,
+            "display_name": member.display_name,
+            "period": period,
+            "total_streams": total_streams,
+            "total_time_seconds": total_time,
+            "avg_duration_seconds": avg_duration,
+            "sessions": sessions,
+        }
+        return web.json_response(response)
+
+    async def _proxy_handle_export(self, request: web.Request):
+        guild_id = request.match_info.get("guild_id")
+        member_id = request.match_info.get("member_id")
+        guild = self.bot.get_guild(int(guild_id)) if guild_id else None
+        if not guild:
+            return web.Response(status=404, text="Guild not found")
+        member = guild.get_member(int(member_id))
+        if not member:
+            return web.Response(status=404, text="Member not found")
+        token = await self.conf.guild(guild).api_token()
+        if not token:
+            return web.Response(status=403, text="No API token configured for this guild")
+        period = "all"
+        if request.content_length:
+            try:
+                body = await request.json()
+                period = body.get("period", period)
+            except Exception:
+                pass
+        cutoff = self._parse_period(period)
+        if cutoff is None:
+            return web.Response(status=400, text="Invalid period")
+        sessions = await self._get_member_sessions(member, guild)
+        if cutoff:
+            sessions = [s for s in sessions if s.get("start", 0) >= cutoff]
         buf = io.StringIO()
         writer = csv.writer(buf)
         writer.writerow(["start_iso", "end_iso", "start_epoch", "end_epoch", "duration_seconds", "game", "platform", "url"])
