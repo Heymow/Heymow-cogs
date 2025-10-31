@@ -1058,7 +1058,7 @@
         const avgHours = cachedData.allMembers.reduce((sum, m) => sum + m.total_time_hours, 0) / cachedData.allMembers.length;
         insights.push({
           title: '⏱️ Streaming Consistency',
-          description: `Average streaming time is ${avgHours.toFixed(1)} hours. Top streamers average ${(cachedData.allMembers.slice(0, 3).reduce((sum, m) => sum + m.total_time_hours, 0) / 3).toFixed(1)} hours.`,
+          description: `Average streaming time is ${avgHours.toFixed(1)} hours. Top streamers average ${cachedData.allMembers.slice(0, 3).reduce((sum, m) => sum + m.total_time_hours, 0) / 3 toFixed(1)} hours.`,
           recommendation: 'Consistent streaming helps build an audience. Aim for at least ' + Math.ceil(avgHours) + ' hours to stay competitive.'
         });
       }
