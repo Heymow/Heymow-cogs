@@ -16,12 +16,14 @@
     }
 
     :root {
-      --dark-jungle: #0d1b0f;
-      --medium-jungle: #1a2e1c;
-      --light-jungle: #2d4a30;
-      --accent-green: #4a7c59;
+      --dark-jungle: #0a150c;
+      --medium-jungle: #15261a;
+      --light-jungle: #264029;
+      --accent-green: #3d6b4d;
+      --accent-blue: #4d7a8c;
+      --accent-purple: #6b4d7a;
       --text-primary: #e8f4ea;
-      --text-secondary: #b8d4bc;
+      --text-secondary: #a8c4ac;
       --seed-color: #2d5016;
       --sprout-color: #6b9e3e;
       --flower-color: #ffb3c1;
@@ -106,6 +108,9 @@
       box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
       transition: all 0.3s ease;
       z-index: 1000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
     }
 
     .help-button:hover {
@@ -555,6 +560,7 @@
       <button class="tab active" onclick="switchTab('overview')">📊 Overview</button>
       <button class="tab" onclick="switchTab('heatmap')">🗓️ Weekly Heatmap</button>
       <button class="tab" onclick="switchTab('streamers')">👥 All Streamers</button>
+      <button class="tab" onclick="switchTab('details')">📈 Streamer Details</button>
       <button class="tab" onclick="switchTab('insights')">💡 Insights</button>
     </div>
 
@@ -603,9 +609,24 @@
     <div id="heatmap-tab" class="tab-content">
       <div class="dashboard-card">
         <h2 class="chart-title">Weekly Stream Schedule Heatmap</h2>
-        <p style="text-align: center; color: var(--text-secondary); margin-bottom: 20px;">
+        <p style="text-align: center; color: var(--text-secondary); margin-bottom: 15px;">
           Use this heatmap to identify the best streaming times. Darker colors indicate more active streaming periods.
         </p>
+        <div style="text-align: center; margin-bottom: 20px;">
+          <label for="timezoneSelect" style="margin-right: 10px;">Timezone:</label>
+          <select id="timezoneSelect" onchange="fetchHeatmap()">
+            <option value="auto">Auto (Your Local Time)</option>
+            <option value="UTC">UTC</option>
+            <option value="America/New_York">Eastern Time (ET)</option>
+            <option value="America/Chicago">Central Time (CT)</option>
+            <option value="America/Denver">Mountain Time (MT)</option>
+            <option value="America/Los_Angeles">Pacific Time (PT)</option>
+            <option value="Europe/London">London (GMT/BST)</option>
+            <option value="Europe/Paris">Paris (CET/CEST)</option>
+            <option value="Asia/Tokyo">Tokyo (JST)</option>
+            <option value="Australia/Sydney">Sydney (AEST/AEDT)</option>
+          </select>
+        </div>
         <div class="heatmap-container">
           <div id="heatmapGrid" class="heatmap">
             <div class="loading">Loading heatmap data...</div>
@@ -624,6 +645,22 @@
       </div>
     </div>
 
+    <!-- Streamer Details Tab -->
+    <div id="details-tab" class="tab-content">
+      <div class="dashboard-card">
+        <h2 class="chart-title">Streamer Details</h2>
+        <div style="margin-bottom: 20px;">
+          <label for="streamerSelect" style="margin-right: 10px;">Select Streamer:</label>
+          <select id="streamerSelect" style="min-width: 200px;" onchange="loadStreamerDetails()">
+            <option value="">-- Choose a streamer --</option>
+          </select>
+        </div>
+        <div id="streamerDetailsContent">
+          <p style="text-align: center; color: var(--text-secondary);">Select a streamer to view detailed statistics.</p>
+        </div>
+      </div>
+    </div>
+
     <!-- Insights Tab -->
     <div id="insights-tab" class="tab-content">
       <div class="dashboard-card">
@@ -635,7 +672,7 @@
     </div>
 
     <footer>
-      <p>© <span id="currentYear"></span> SoundGarden Stream Stats • Powered by StreamRoles</p>
+      <p>© <span id="currentYear"></span> Heymow • SoundGarden Stream Stats</p>
       <p style="margin-top: 10px; font-size: 0.85rem;">Track your growth, optimize your schedule, and connect with the community! 🎵</p>
     </footer>
   </div>
@@ -669,7 +706,7 @@
     }
 
     // Tab switching
-    function switchTab(tabName) {
+    function switchTab(tabName, selectedMemberId = null) {
       currentTab = tabName;
       
       // Update tab buttons
@@ -679,7 +716,8 @@
         'overview': 0,
         'heatmap': 1,
         'streamers': 2,
-        'insights': 3
+        'details': 3,
+        'insights': 4
       };
       const tabIndex = tabButtons[tabName] || 0;
       document.querySelectorAll('.tab')[tabIndex]?.classList.add('active');
@@ -695,6 +733,12 @@
         fetchHeatmap();
       } else if (tabName === 'streamers') {
         fetchAllStreamers();
+      } else if (tabName === 'details') {
+        populateStreamerSelect();
+        if (selectedMemberId) {
+          document.getElementById('streamerSelect').value = selectedMemberId;
+          loadStreamerDetails();
+        }
       } else if (tabName === 'insights') {
         generateInsights();
       }
@@ -710,6 +754,8 @@
         fetchHeatmap();
       } else if (currentTab === 'streamers') {
         fetchAllStreamers();
+      } else if (currentTab === 'details') {
+        loadStreamerDetails();
       } else if (currentTab === 'insights') {
         generateInsights();
       }
@@ -870,16 +916,52 @@
     function renderHeatmap(data) {
       const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
       const heatmapGrid = document.getElementById('heatmapGrid');
+      const timezone = document.getElementById('timezoneSelect').value;
       
-      // Create a map for easy lookup
+      // Get timezone offset
+      let timezoneOffset = 0;
+      if (timezone === 'auto') {
+        timezoneOffset = -(new Date().getTimezoneOffset() / 60);
+      } else if (timezone !== 'UTC') {
+        // Calculate offset for selected timezone
+        try {
+          const now = new Date();
+          const utcDate = new Date(now.toLocaleString('en-US', { timeZone: 'UTC' }));
+          const tzDate = new Date(now.toLocaleString('en-US', { timeZone: timezone }));
+          timezoneOffset = (tzDate - utcDate) / (1000 * 60 * 60);
+        } catch (e) {
+          timezoneOffset = 0;
+        }
+      }
+      
+      // Create a map with timezone-adjusted data
       const dataMap = {};
+      for (let day = 0; day < 7; day++) {
+        for (let hour = 0; hour < 24; hour++) {
+          dataMap[`${day}-${hour}`] = 0;
+        }
+      }
+      
       data.forEach(item => {
-        const key = `${item.day}-${item.hour}`;
-        dataMap[key] = item.count;
+        let adjustedHour = item.hour + timezoneOffset;
+        let adjustedDay = item.day;
+        
+        // Handle day overflow/underflow
+        while (adjustedHour >= 24) {
+          adjustedHour -= 24;
+          adjustedDay = (adjustedDay + 1) % 7;
+        }
+        while (adjustedHour < 0) {
+          adjustedHour += 24;
+          adjustedDay = (adjustedDay - 1 + 7) % 7;
+        }
+        
+        const key = `${adjustedDay}-${Math.floor(adjustedHour)}`;
+        dataMap[key] = (dataMap[key] || 0) + item.count;
       });
       
       // Find max count for color scaling
-      const maxCount = Math.max(...data.map(d => d.count), 1);
+      const maxCount = Math.max(...Object.values(dataMap), 1);
       
       // Clear grid
       heatmapGrid.innerHTML = '';
@@ -899,11 +981,21 @@
           const count = dataMap[key] || 0;
           const intensity = maxCount > 0 ? count / maxCount : 0;
           
-          // Color gradient from dark to bright green
-          const hue = 120; // Green
-          const saturation = 50 + (intensity * 30);
-          const lightness = 15 + (intensity * 40);
-          const color = `hsl(${hue}, ${saturation}%, ${lightness}%)`;
+          // Color gradient with more variety
+          let color;
+          if (count === 0) {
+            color = 'hsl(140, 30%, 12%)'; // Very dark green for zero
+          } else if (intensity < 0.2) {
+            color = `hsl(150, ${40 + intensity * 20}%, ${18 + intensity * 10}%)`; // Dark teal-green
+          } else if (intensity < 0.4) {
+            color = `hsl(135, ${45 + intensity * 25}%, ${25 + intensity * 15}%)`; // Medium green
+          } else if (intensity < 0.6) {
+            color = `hsl(120, ${50 + intensity * 30}%, ${35 + intensity * 15}%)`; // Bright green
+          } else if (intensity < 0.8) {
+            color = `hsl(100, ${55 + intensity * 25}%, ${45 + intensity * 15}%)`; // Yellow-green
+          } else {
+            color = `hsl(80, ${60 + intensity * 20}%, ${55 + intensity * 15}%)`; // Lime green
+          }
           
           const cell = document.createElement('div');
           cell.className = 'heatmap-cell';
@@ -911,6 +1003,9 @@
           cell.title = `${days[day]} ${hour}:00 - ${count} stream(s)`;
           if (count > 0) {
             cell.textContent = count;
+            // Determine text color based on lightness
+            const match = color.match(/hsl\(\d+,\s*\d+%,\s*(\d+)%\)/);
+            const lightness = match ? parseInt(match[1]) : 50;
             cell.style.color = lightness > 40 ? '#000' : '#fff';
           }
           
@@ -961,6 +1056,8 @@
       data.forEach((streamer, index) => {
         const item = document.createElement('div');
         item.className = 'streamer-item';
+        item.style.cursor = 'pointer';
+        item.onclick = () => switchTab('details', streamer.member_id);
         
         const roleClass = streamer.role ? `role-${streamer.role}` : '';
         const roleIcon = getRoleIcon(streamer.role);
@@ -1120,6 +1217,215 @@
           <p style="color: var(--text-secondary); font-style: italic; line-height: 1.6;">💡 ${insight.recommendation}</p>
         `;
         insightsContent.appendChild(card);
+      });
+    }
+
+    // Streamer Details Functions
+    async function populateStreamerSelect() {
+      if (!cachedData.allMembers) {
+        await fetchAllMembersData();
+      }
+      
+      const select = document.getElementById('streamerSelect');
+      select.innerHTML = '<option value="">-- Choose a streamer --</option>';
+      
+      if (cachedData.allMembers) {
+        cachedData.allMembers.forEach(member => {
+          const option = document.createElement('option');
+          option.value = member.member_id;
+          option.textContent = member.display_name;
+          select.appendChild(option);
+        });
+      }
+    }
+
+    async function loadStreamerDetails() {
+      const memberId = document.getElementById('streamerSelect').value;
+      const content = document.getElementById('streamerDetailsContent');
+      
+      if (!memberId) {
+        content.innerHTML = '<p style="text-align: center; color: var(--text-secondary);">Select a streamer to view detailed statistics.</p>';
+        return;
+      }
+      
+      content.innerHTML = '<div class="loading">Loading streamer details...</div>';
+      
+      try {
+        const period = document.getElementById('period').value;
+        const resp = await fetch(`/dashboard/proxy/member/0/${memberId}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ period: period })
+        });
+        
+        if (!resp.ok) {
+          throw new Error('Server returned error: ' + resp.status);
+        }
+        
+        const data = await resp.json();
+        renderStreamerDetails(data);
+        
+      } catch (error) {
+        console.error('Error fetching streamer details:', error);
+        content.innerHTML = '<div class="loading">Failed to load streamer details.</div>';
+      }
+    }
+
+    function renderStreamerDetails(data) {
+      const content = document.getElementById('streamerDetailsContent');
+      
+      // Find role for this member
+      const memberData = cachedData.allMembers?.find(m => m.member_id == data.member_id);
+      const roleClass = memberData?.role ? `role-${memberData.role}` : '';
+      const roleIcon = getRoleIcon(memberData?.role);
+      
+      let html = `
+        <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 30px;">
+          <div class="role-badge ${roleClass}" style="width: 60px; height: 60px; font-size: 1.8rem;">${roleIcon}</div>
+          <div>
+            <h3 style="color: var(--text-primary); font-size: 1.8rem; margin-bottom: 5px;">${data.display_name}</h3>
+            <p style="color: var(--text-secondary);">Member ID: ${data.member_id}</p>
+          </div>
+        </div>
+        
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 30px;">
+          <div class="stat-card">
+            <div class="stat-value">${data.total_streams}</div>
+            <div class="stat-label">Total Streams</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value">${(data.total_time_seconds / 3600).toFixed(1)}h</div>
+            <div class="stat-label">Total Time</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value">${(data.avg_duration_seconds / 3600).toFixed(1)}h</div>
+            <div class="stat-label">Avg Duration</div>
+          </div>
+        </div>
+      `;
+      
+      // Display Twitch link if available in sessions
+      if (data.sessions && data.sessions.length > 0) {
+        const latestSession = data.sessions[data.sessions.length - 1];
+        if (latestSession.url) {
+          html += `
+            <div style="background: rgba(74, 124, 89, 0.3); border: 1px solid var(--accent-green); border-radius: 12px; padding: 20px; margin-bottom: 30px;">
+              <h4 style="color: var(--accent-green); margin-bottom: 10px;">🎮 Latest Twitch Stream</h4>
+              <a href="${latestSession.url}" target="_blank" style="color: var(--text-primary); text-decoration: none; font-weight: 500;">${latestSession.url}</a>
+            </div>
+          `;
+        }
+      }
+      
+      // Show chart if we have sessions
+      if (data.sessions && data.sessions.length > 0) {
+        html += `
+          <div class="chart-container" style="margin-top: 30px;">
+            <h2 class="chart-title">Streaming Activity Over Time</h2>
+            <canvas id="streamerChart"></canvas>
+          </div>
+        `;
+        
+        content.innerHTML = html;
+        renderStreamerChart(data.sessions);
+      } else {
+        html += '<p style="text-align: center; color: var(--text-secondary); margin-top: 30px;">No streaming sessions recorded for this period.</p>';
+        content.innerHTML = html;
+      }
+    }
+
+    function renderStreamerChart(sessions) {
+      const ctx = document.getElementById('streamerChart');
+      if (!ctx) return;
+      
+      // Group sessions by day
+      const dailyData = {};
+      sessions.forEach(session => {
+        const date = new Date(session.start * 1000);
+        const dayKey = date.toISOString().split('T')[0];
+        if (!dailyData[dayKey]) {
+          dailyData[dayKey] = { hours: 0, streams: 0 };
+        }
+        dailyData[dayKey].hours += session.duration / 3600;
+        dailyData[dayKey].streams += 1;
+      });
+      
+      const sortedDates = Object.keys(dailyData).sort();
+      const labels = sortedDates.map(d => {
+        const date = new Date(d);
+        return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      });
+      const hoursData = sortedDates.map(d => dailyData[d].hours.toFixed(2));
+      const streamsData = sortedDates.map(d => dailyData[d].streams);
+      
+      new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: labels,
+          datasets: [
+            {
+              label: 'Hours Streamed',
+              data: hoursData,
+              borderColor: 'rgba(74, 124, 89, 1)',
+              backgroundColor: 'rgba(74, 124, 89, 0.2)',
+              yAxisID: 'y',
+              tension: 0.3
+            },
+            {
+              label: 'Number of Streams',
+              data: streamsData,
+              borderColor: 'rgba(77, 122, 140, 1)',
+              backgroundColor: 'rgba(77, 122, 140, 0.2)',
+              yAxisID: 'y1',
+              tension: 0.3
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          interaction: {
+            mode: 'index',
+            intersect: false,
+          },
+          plugins: {
+            legend: {
+              labels: {
+                color: '#264029',
+                font: { family: "'Inter', sans-serif" }
+              }
+            }
+          },
+          scales: {
+            y: {
+              type: 'linear',
+              display: true,
+              position: 'left',
+              title: {
+                display: true,
+                text: 'Hours',
+                color: '#264029'
+              },
+              ticks: { color: '#264029' },
+              grid: { color: 'rgba(38, 64, 41, 0.2)' }
+            },
+            y1: {
+              type: 'linear',
+              display: true,
+              position: 'right',
+              title: {
+                display: true,
+                text: 'Streams',
+                color: '#264029'
+              },
+              ticks: { color: '#264029' },
+              grid: { drawOnChartArea: false }
+            },
+            x: {
+              ticks: { color: '#264029' },
+              grid: { display: false }
+            }
+          }
+        }
       });
     }
 
