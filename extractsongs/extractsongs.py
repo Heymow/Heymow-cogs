@@ -1,6 +1,6 @@
 #version 1.0
 #
-#Developed by: You
+#Developed by: Heymow
 #
 import asyncio
 from redbot.core import commands, Config, app_commands
