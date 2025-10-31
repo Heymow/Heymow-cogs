@@ -37,6 +37,7 @@ class StreamRoles(commands.Cog):
             alerts__enabled=False,
             alerts__channel=None,
             alerts__autodelete=True,
+            required_role=None,  # ID of role required to be eligible for streamrole
         )
         self.conf.register_member(
             blacklisted=False, whitelisted=False, alert_messages={}
@@ -248,35 +249,6 @@ class StreamRoles(commands.Cog):
         await self.conf.guild(ctx.guild).alerts.autodelete.set(true_or_false)
         await ctx.tick()
 
-    async def _get_filter_list(
-        self, guild: discord.Guild, mode: FilterList
-    ) -> Tuple[List[discord.Member], List[discord.Role]]:
-        all_member_data = await self.conf.all_members(guild)
-        all_role_data = await self.conf.all_roles()
-        mode = mode.as_participle()
-        member_ids = (u for u, d in all_member_data.items() if d.get(mode))
-        role_ids = (u for u, d in all_role_data.items() if d.get(mode))
-        members = list(filter(None, map(guild.get_member, member_ids)))
-        roles = list(filter(None, map(guild.get_role, role_ids)))
-        return members, roles
-
-    async def _update_filter_list_entry(
-        self,
-        member_or_role: Union[discord.Member, discord.Role],
-        filter_list: FilterList,
-        value: bool,
-    ) -> None:
-        if isinstance(member_or_role, discord.Member):
-            await self.conf.member(member_or_role).set_raw(
-                filter_list.as_participle(), value=value
-            )
-            await self._update_member(member_or_role)
-        else:
-            await self.conf.role(member_or_role).set_raw(
-                filter_list.as_participle(), value=value
-            )
-            await self._update_members_with_role(member_or_role)
-
     @streamrole.command()
     async def setrole(self, ctx: commands.Context, *, role: discord.Role):
         """Set the role which is given to streamers."""
@@ -285,6 +257,44 @@ class StreamRoles(commands.Cog):
             "Done. Streamers will now be given the {} role when "
             "they go live.".format(role.name)
         )
+
+    @streamrole.command()
+    async def setrequiredrole(self, ctx: commands.Context, *, role: str):
+        """Set a role required to be eligible for the streamrole.
+
+        Pass a role mention, exact name, or ID to require it. Pass 'none' to disable the requirement.
+        """
+        if role.lower() == "none":
+            await self.conf.guild(ctx.guild).required_role.set(None)
+            await ctx.send("Disabled required role. Any eligible member can now receive the streamrole.")
+            await self._update_guild(ctx.guild)
+            return
+
+        # Try to resolve a mention or ID first
+        resolved = None
+        if role.isdigit():
+            resolved = ctx.guild.get_role(int(role))
+        if resolved is None:
+            # check mention format <@&id>
+            if role.startswith("<@&") and role.endswith(">"):
+                try:
+                    rid = int(role[3:-1])
+                    resolved = ctx.guild.get_role(rid)
+                except ValueError:
+                    resolved = None
+        if resolved is None:
+            # fallback to name match (case-sensitive exact), then case-insensitive
+            resolved = discord.utils.find(lambda r: r.name == role, ctx.guild.roles)
+            if resolved is None:
+                resolved = discord.utils.find(lambda r: r.name.lower() == role.lower(), ctx.guild.roles)
+
+        if resolved is None:
+            await ctx.send("Rôle introuvable. Utilise une mention, le nom exact, ou l'ID, ou 'none' pour désactiver.")
+            return
+
+        await self.conf.guild(ctx.guild).required_role.set(resolved.id)
+        await ctx.send(f"Set required role: {resolved.name}. Only members with this role can receive the streamrole.")
+        await self._update_guild(ctx.guild)
 
     @streamrole.command()
     async def forceupdate(self, ctx: commands.Context):
@@ -349,6 +359,13 @@ class StreamRoles(commands.Cog):
             return
         return guild.get_channel(alerts_data["channel"])
 
+    async def get_required_role(self, guild: discord.Guild) -> Optional[discord.Role]:
+        """Return the Role that is required for eligibility, or None."""
+        role_id = await self.conf.guild(guild).required_role()
+        if not role_id:
+            return None
+        return guild.get_role(role_id)
+
     async def _update_member(
         self,
         member: discord.Member,
@@ -364,27 +381,72 @@ class StreamRoles(commands.Cog):
             if alerts_channel is not _alerts_channel_sentinel
             else await self.get_alerts_channel(member.guild)
         )
-        # find the first streaming activity
+
+        # If a required role is configured, check it here. If the member doesn't have it,
+        # ensure the streamrole is removed (if present) and do nothing else.
+        required = await self.get_required_role(member.guild)
+        if required is not None and required not in member.roles:
+            if role in member.roles:
+                log.debug(
+                    "Removing streamrole %s from member %s because they lack required role %s",
+                    role.id,
+                    member.id,
+                    required.id,
+                )
+                await member.remove_roles(role)
+                if channel and await self.conf.guild(member.guild).alerts.autodelete():
+                    await self._remove_alert(member, channel)
+            return
+
+        # find the first Streaming activity
         activity = next(
             (a for a in member.activities if isinstance(a, discord.Streaming)),
             None,
         )
-        # ignore if no platform specified
-        if activity is not None and not activity.platform:
-            activity = None
+        if activity is None:
+            has_role = role in member.roles
+            if has_role:
+                log.debug("Removing streamrole %s from member %s", role.id, member.id)
+                await member.remove_roles(role)
+                if channel and await self.conf.guild(member.guild).alerts.autodelete():
+                    await self._remove_alert(member, channel)
+            return
 
-        # Only allow Twitch: check platform name or URL
-        if activity is not None:
-            platform = str(activity.platform).lower()
-            url = str(activity.url or "").lower()
-            if "twitch" not in platform and "twitch.tv" not in url:
-                activity = None
-                has_role = role in member.roles
-                if has_role:
-                    log.debug("Removing streamrole %s from member %s", role.id, member.id)
-                    await member.remove_roles(role)
-                    if channel and await self.conf.guild(member.guild).alerts.autodelete():
-                        await self._remove_alert(member, channel)
+        # ensure platform/url indicate Twitch only
+        platform = str(activity.platform or "").lower()
+        url = str(activity.url or "").lower()
+        if "twitch" not in platform and "twitch.tv" not in url:
+            # not a Twitch stream -> remove role if present and do nothing
+            if role in member.roles:
+                log.debug(
+                    "Removing streamrole %s from member %s because stream is not Twitch",
+                    role.id,
+                    member.id,
+                )
+                await member.remove_roles(role)
+                if channel and await self.conf.guild(member.guild).alerts.autodelete():
+                    await self._remove_alert(member, channel)
+            return
+
+        # final checks: filter lists and game whitelist
+        has_role = role in member.roles
+        if await self._is_allowed(member):
+            game = activity.game
+            games = await self.conf.guild(member.guild).game_whitelist()
+            if not games or game in games:
+                if not has_role:
+                    log.debug("Adding streamrole %s to member %s", role.id, member.id)
+                    await member.add_roles(role)
+                    if channel:
+                        await self._post_alert(member, activity, game, channel)
+                return
+
+        # if we reach here, they shouldn't have the role
+        if has_role:
+            log.debug("Removing streamrole %s from member %s", role.id, member.id)
+            await member.remove_roles(role)
+            if channel and await self.conf.guild(member.guild).alerts.autodelete():
+                await self._remove_alert(member, channel)
 
     async def _update_members_with_role(self, role: discord.Role) -> None:
         streamer_role = await self.get_streamer_role(role.guild)
