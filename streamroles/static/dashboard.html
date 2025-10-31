@@ -319,7 +319,7 @@
       font-size: 1.3rem;
       font-weight: 600;
       margin-bottom: 20px;
-      color: var(--medium-jungle);
+      color: var(--text-secondary);
     }
 
     .stats-grid {
@@ -424,13 +424,15 @@
     .heatmap-container {
       overflow-x: auto;
       padding: 10px 0;
+      text-align: center; /* Center align the container content */
     }
 
     .heatmap {
-      display: grid;
+      display: inline-grid; /* Use inline-grid instead of grid */
       grid-template-columns: 60px repeat(24, 40px);
       gap: 2px;
       min-width: 1000px;
+      text-align: initial; /* Reset text alignment for grid items */
     }
 
     .heatmap-label {
@@ -599,7 +601,7 @@
 
       <div class="dashboard-card">
         <div class="chart-container">
-          <h2 class="chart-title">Top 10 Streamers by Hours</h2>
+          <h2 class="chart-title" style="color: #15261a;">Top 10 Streamers by Hours</h2>
           <canvas id="topChart"></canvas>
         </div>
       </div>
