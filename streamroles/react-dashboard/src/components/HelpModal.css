@@ -1,0 +1,101 @@
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(5px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 20px;
+}
+
+.modal-content {
+  background: var(--medium-jungle);
+  border: 1px solid var(--accent-green);
+  border-radius: 15px;
+  padding: 30px;
+  max-width: 600px;
+  max-height: 80vh;
+  overflow-y: auto;
+  position: relative;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+}
+
+.modal-close {
+  position: absolute;
+  top: 15px;
+  right: 15px;
+  background: rgba(255, 255, 255, 0.1);
+  border: none;
+  color: var(--text-primary);
+  font-size: 2rem;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: all 0.3s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.modal-close:hover {
+  background: rgba(255, 107, 107, 0.3);
+  transform: rotate(90deg);
+}
+
+.modal-content h2 {
+  color: var(--text-primary);
+  margin-bottom: 20px;
+  font-size: 1.8rem;
+}
+
+.help-section {
+  margin-bottom: 20px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.help-section:last-child {
+  border-bottom: none;
+}
+
+.help-section h3 {
+  color: var(--accent-green);
+  margin-bottom: 10px;
+  font-size: 1.2rem;
+}
+
+.help-section p {
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.role-list {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.role-badge {
+  padding: 5px 12px;
+  border-radius: 15px;
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
+.role-badge.seed { background: var(--seed-color); }
+.role-badge.sprout { background: var(--sprout-color); }
+.role-badge.flower { background: var(--flower-color); color: #000; }
+.role-badge.rosegarden { background: var(--rosegarden-color); }
+.role-badge.eden { background: var(--eden-color); color: #000; }
+.role-badge.patrons { background: var(--patrons-color); }
+.role-badge.sponsor { background: var(--sponsor-color); }
+.role-badge.garden_guardian { background: var(--garden-guardian-color); }
+.role-badge.admin { background: var(--admin-color); }

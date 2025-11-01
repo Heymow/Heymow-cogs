@@ -1,0 +1,54 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+:root {
+  --dark-jungle: #0a150c;
+  --medium-jungle: #15261a;
+  --light-jungle: #264029;
+  --accent-green: #3d6b4d;
+  --accent-blue: #4d7a8c;
+  --accent-purple: #6b4d7a;
+  --text-primary: #e8f4ea;
+  --text-secondary: #a8c4ac;
+  --seed-color: #2d5016;
+  --sprout-color: #6b9e3e;
+  --flower-color: #ffb3c1;
+  --rosegarden-color: #ff69b4;
+  --eden-color: #87ceeb;
+  --patrons-color: #ff1493;
+  --sponsor-color: #c19a6b;
+  --garden-guardian-color: #ff8c00;
+  --admin-color: #dc143c;
+}
+
+body {
+  font-family: 'Inter', sans-serif;
+  background: var(--dark-jungle);
+  min-height: 100vh;
+  color: var(--text-primary);
+  position: relative;
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-image: url('https://images.unsplash.com/photo-1518531933037-91b2f5f229cc?w=1920&q=80');
+  background-size: cover;
+  background-position: center;
+  filter: blur(8px) brightness(0.3);
+  z-index: -1;
+}
+
+code {
+  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New', monospace;
+}

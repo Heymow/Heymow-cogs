@@ -40,6 +40,7 @@ from .badges import (
     BADGES,
     ACHIEVEMENTS,
 )
+from .twitch_watcher import TwitchWatcher
 
 log = logging.getLogger("red.streamroles")
 
@@ -85,6 +86,8 @@ class StreamRoles(commands.Cog):
             stats__retention_days=365,
             api_token=None,        # per-guild API token for embedded API
             fixed_guild_id=None,   # optional fixed guild id for dashboard proxy (stored per-guild)
+            watched_channels=[],   # channels being watched for Twitch links
+            tracked_twitch_channels=[],  # Twitch channels discovered from links
         )
         # Member config
         self.conf.register_member(
@@ -108,6 +111,9 @@ class StreamRoles(commands.Cog):
 
         # precompute networks
         self._allowed_nets = [ipaddress.ip_network(c) for c in self._INTERNAL_CIDRS]
+        
+        # Initialize Twitch watcher
+        self.twitch_watcher = TwitchWatcher(self.conf)
 
     # -----------------
     # Initialization
@@ -528,6 +534,178 @@ class StreamRoles(commands.Cog):
         await ctx.send(f"Fixed guild id set to {guild_id} for this guild.")
 
     # -----------------
+    # Twitch channel watching commands
+    # -----------------
+    @streamrole.group(name="twitch", autohelp=True)
+    async def twitch_group(self, ctx: commands.Context):
+        """Manage Twitch channel watching and tracking."""
+        pass
+
+    @twitch_group.command(name="watch")
+    async def twitch_watch(self, ctx: commands.Context, channel: discord.TextChannel):
+        """Start watching a channel for Twitch links.
+        
+        When a message with a Twitch link is posted in a watched channel,
+        the Twitch channel will be automatically added to tracking.
+        """
+        await self.twitch_watcher.add_watched_channel(ctx.guild, channel.id)
+        await ctx.send(f"Now watching {channel.mention} for Twitch links. Any Twitch channels posted here will be automatically tracked.")
+
+    @twitch_group.command(name="unwatch")
+    async def twitch_unwatch(self, ctx: commands.Context, channel: discord.TextChannel):
+        """Stop watching a channel for Twitch links."""
+        await self.twitch_watcher.remove_watched_channel(ctx.guild, channel.id)
+        await ctx.send(f"Stopped watching {channel.mention} for Twitch links.")
+
+    @twitch_group.command(name="listwatched")
+    async def twitch_list_watched(self, ctx: commands.Context):
+        """List all channels being watched for Twitch links."""
+        watched = await self.twitch_watcher.get_watched_channels(ctx.guild)
+        if not watched:
+            await ctx.send("No channels are currently being watched for Twitch links.")
+            return
+        
+        channel_mentions = []
+        for channel_id in watched:
+            channel = ctx.guild.get_channel(channel_id)
+            if channel:
+                channel_mentions.append(channel.mention)
+            else:
+                channel_mentions.append(f"<deleted channel {channel_id}>")
+        
+        await ctx.send(f"**Watched channels:**\n" + "\n".join(channel_mentions))
+
+    @twitch_group.command(name="scan")
+    async def twitch_scan_history(
+        self, 
+        ctx: commands.Context, 
+        channel: discord.TextChannel, 
+        limit: int = 100
+    ):
+        """Scan a channel's history for Twitch links and add them to tracking.
+        
+        Args:
+            channel: The channel to scan
+            limit: Number of recent messages to scan (default: 100, max: 1000)
+        """
+        if limit < 1 or limit > 1000:
+            await ctx.send("Limit must be between 1 and 1000.")
+            return
+        
+        async with ctx.typing():
+            messages_scanned, newly_added = await self.twitch_watcher.scan_channel_history(channel, limit)
+        
+        if newly_added:
+            channels_list = "\n".join([f"• twitch.tv/{ch}" for ch in newly_added])
+            await ctx.send(
+                f"✅ Scanned {messages_scanned} messages in {channel.mention}\n"
+                f"**Found {len(newly_added)} new Twitch channels:**\n{channels_list}"
+            )
+        else:
+            await ctx.send(
+                f"Scanned {messages_scanned} messages in {channel.mention}\n"
+                f"No new Twitch channels found (all were already tracked)."
+            )
+
+    @twitch_group.command(name="list")
+    async def twitch_list_tracked(self, ctx: commands.Context):
+        """List all tracked Twitch channels."""
+        tracked = await self.twitch_watcher.get_tracked_twitch_channels(ctx.guild)
+        if not tracked:
+            await ctx.send("No Twitch channels are currently being tracked.")
+            return
+        
+        # Sort alphabetically
+        tracked_sorted = sorted(tracked)
+        
+        # Format in pages if there are many
+        pages = []
+        page_size = 20
+        for i in range(0, len(tracked_sorted), page_size):
+            chunk = tracked_sorted[i:i+page_size]
+            channels_list = "\n".join([f"• twitch.tv/{ch}" for ch in chunk])
+            pages.append(f"**Tracked Twitch Channels ({len(tracked)} total):**\n{channels_list}")
+        
+        if len(pages) == 1:
+            await ctx.send(pages[0])
+        else:
+            # Use menu for multiple pages
+            await menus.menu(ctx, pages, menus.DEFAULT_CONTROLS)
+
+    @twitch_group.command(name="add")
+    async def twitch_add_channel(self, ctx: commands.Context, twitch_username: str):
+        """Manually add a Twitch channel to tracking.
+        
+        Args:
+            twitch_username: The Twitch username to track (without twitch.tv/)
+        """
+        # Clean the username (remove any URL parts)
+        username = twitch_username.strip().lower()
+        username = username.replace("https://", "").replace("http://", "")
+        username = username.replace("www.", "").replace("twitch.tv/", "")
+        username = username.split("/")[0]  # Take only the username part
+        
+        if not username or len(username) < 4 or len(username) > 25:
+            await ctx.send("Invalid Twitch username. Usernames must be 4-25 characters.")
+            return
+        
+        if await self.twitch_watcher.is_twitch_channel_tracked(ctx.guild, username):
+            await ctx.send(f"Twitch channel `{username}` is already being tracked.")
+            return
+        
+        await self.twitch_watcher.add_twitch_channel(ctx.guild, username)
+        await ctx.send(f"✅ Added Twitch channel `{username}` to tracking.")
+
+    @twitch_group.command(name="remove")
+    async def twitch_remove_channel(self, ctx: commands.Context, twitch_username: str):
+        """Remove a specific Twitch channel from tracking.
+        
+        Args:
+            twitch_username: The Twitch username to remove (without twitch.tv/)
+        """
+        # Clean the username
+        username = twitch_username.strip().lower()
+        username = username.replace("https://", "").replace("http://", "")
+        username = username.replace("www.", "").replace("twitch.tv/", "")
+        username = username.split("/")[0]
+        
+        if await self.twitch_watcher.remove_twitch_channel(ctx.guild, username):
+            await ctx.send(f"✅ Removed Twitch channel `{username}` from tracking.")
+        else:
+            await ctx.send(f"Twitch channel `{username}` was not found in tracking.")
+
+    @twitch_group.command(name="flush")
+    async def twitch_flush_all(self, ctx: commands.Context):
+        """Remove all tracked Twitch channels.
+        
+        ⚠️ This will clear all tracked Twitch channels for this server.
+        """
+        tracked = await self.twitch_watcher.get_tracked_twitch_channels(ctx.guild)
+        if not tracked:
+            await ctx.send("No Twitch channels are currently being tracked.")
+            return
+        
+        # Confirmation
+        msg = await ctx.send(
+            f"⚠️ **Warning:** This will remove all {len(tracked)} tracked Twitch channels from this server.\n"
+            f"Are you sure you want to continue?"
+        )
+        menus.start_adding_reactions(msg, predicates.ReactionPredicate.YES_OR_NO_EMOJIS)
+        pred = predicates.ReactionPredicate.yes_or_no(msg, ctx.author)
+        
+        try:
+            await ctx.bot.wait_for("reaction_add", check=pred, timeout=30.0)
+        except asyncio.TimeoutError:
+            await ctx.send("Action cancelled (timed out).")
+            return
+        
+        if pred.result:
+            await self.twitch_watcher.clear_all_twitch_channels(ctx.guild)
+            await ctx.send(f"✅ Cleared all {len(tracked)} tracked Twitch channels.")
+        else:
+            await ctx.send("Action cancelled.")
+
+    # -----------------
     # Core helpers
     # -----------------
     async def get_streamer_role(self, guild: discord.Guild) -> Optional[discord.Role]:
@@ -714,6 +892,20 @@ class StreamRoles(commands.Cog):
     async def on_member_join(self, member: discord.Member) -> None:
         await self._update_member(member)
 
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message) -> None:
+        """Listen for messages containing Twitch links in watched channels."""
+        # Ignore bot messages and DMs
+        if message.author.bot or not message.guild:
+            return
+        
+        # Process message for Twitch links
+        newly_added = await self.twitch_watcher.process_message_for_twitch_links(message)
+        
+        # Optionally notify about newly added channels (can be disabled if too spammy)
+        # if newly_added and self.DEBUG_MODE:
+        #     log.debug(f"Auto-added {len(newly_added)} Twitch channels from message in {message.guild.id}")
+
     # -----------------
     # Filter helpers
     # -----------------
@@ -799,6 +991,8 @@ class StreamRoles(commands.Cog):
             [
                 web.get("/", self._handle_index),
                 web.get("/dashboard", self._handle_dashboard),
+                web.get("/dashboard/react", self._handle_react_dashboard),
+                web.static("/dashboard/react/assets", os.path.join(os.path.dirname(__file__), "static", "react-build", "assets")),
                 web.post("/dashboard/proxy/top", self._proxy_handle_top),
                 web.post("/dashboard/proxy/member/{guild_id}/{member_id}", self._proxy_handle_member),
                 web.post("/dashboard/proxy/export/{guild_id}/{member_id}", self._proxy_handle_export),
@@ -919,6 +1113,21 @@ class StreamRoles(commands.Cog):
 </html>
 """
         return web.Response(text=html, content_type="text/html")
+
+    async def _handle_react_dashboard(self, request: web.Request):
+        """Serve the React-based dashboard."""
+        try:
+            base = os.path.dirname(__file__)
+            react_build_path = os.path.join(base, "static", "react-build", "index.html")
+            if os.path.exists(react_build_path):
+                return web.FileResponse(path=react_build_path)
+        except Exception:
+            pass
+        return web.Response(
+            text="React dashboard not built. Please run 'npm run build' in the react-dashboard directory.",
+            content_type="text/plain",
+            status=404
+        )
 
     async def _handle_member_stats(self, request: web.Request):
         guild_id = request.match_info.get("guild_id")
