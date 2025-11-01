@@ -1,6 +1,6 @@
 # Full merged StreamRoles cog with:
 # - embedded aiohttp API (/api/...) restricted to local-only via middleware
-# - public dashboard at /dashboard
+# - public dashboard at /dashboard (now served at / as canonical URL; /dashboard redirects to /)
 # - public server-side proxy endpoints under /dashboard/proxy/* that use the stored per-guild token from Config
 # - streamrole setapitoken command to store per-guild token server-side
 # - streamrole setfixedguild command to set/clear a fixed guild id in Config at runtime (no redeploy)
@@ -1002,9 +1002,10 @@ class StreamRoles(commands.Cog):
                 log.warning(ui_unavailable_msg)
         
         # Build routes list
+        # NOTE: Changed so the canonical dashboard URL is "/" (root). "/dashboard" will redirect to "/".
         routes = [
-            web.get("/", self._handle_index),
-            web.get("/dashboard", self._handle_dashboard),
+            web.get("/", self._handle_dashboard),  # serve dashboard at root so URL in browser doesn't show /dashboard
+            web.get("/dashboard", self._handle_dashboard_redirect),
             web.get("/dashboard/react", self._handle_react_dashboard),
         ]
         
@@ -1086,6 +1087,7 @@ class StreamRoles(commands.Cog):
 
     # ---------- API handlers (internal, local-only) ----------
     async def _handle_index(self, request: web.Request):
+        # kept for compatibility if any internal client calls root; it's not used as the dashboard entrypoint anymore
         return web.Response(text="StreamRoles API is running.", content_type="text/plain")
 
     async def _handle_dashboard(self, request: web.Request):
@@ -1140,6 +1142,10 @@ class StreamRoles(commands.Cog):
 </html>
 """
         return web.Response(text=html, content_type="text/html")
+
+    async def _handle_dashboard_redirect(self, request: web.Request):
+        # Redirect /dashboard to root (/) so browser address bar shows the site without /dashboard
+        raise web.HTTPFound(location="/")
 
     async def _handle_react_dashboard(self, request: web.Request):
         """Serve the React-based dashboard."""
@@ -2294,7 +2300,7 @@ class StreamRoles(commands.Cog):
                     prev_streams += len(prev_filtered)
         
         streamer_growth = ((total_streamers - prev_streamers) / prev_streamers * 100) if prev_streamers else 0
-        stream_growth = ((total_streams - prev_streams) / prev_streams * 100) if prev_streams else 0
+        stream_growth = ((total_streams - prev_streams) / prev_streams * 100) if prev_streamers else 0
         
         # Calculate health score (0-100)
         # Factors: active member %, avg streams, consistency
