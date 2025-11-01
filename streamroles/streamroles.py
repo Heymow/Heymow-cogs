@@ -34,6 +34,12 @@ except Exception:  # pragma: no cover - runtime dependency
     web = None
 
 from .types import FilterList
+from .badges import (
+    calculate_member_badges,
+    calculate_guild_achievements,
+    BADGES,
+    ACHIEVEMENTS,
+)
 
 log = logging.getLogger("red.streamroles")
 
@@ -798,6 +804,13 @@ class StreamRoles(commands.Cog):
                 web.post("/dashboard/proxy/export/{guild_id}/{member_id}", self._proxy_handle_export),
                 web.post("/dashboard/proxy/heatmap", self._proxy_handle_heatmap),
                 web.post("/dashboard/proxy/all_members", self._proxy_handle_all_members),
+                web.post("/dashboard/proxy/badges/{guild_id}/{member_id}", self._proxy_handle_badges),
+                web.post("/dashboard/proxy/badges_batch", self._proxy_handle_badges_batch),
+                web.post("/dashboard/proxy/achievements", self._proxy_handle_achievements),
+                web.post("/dashboard/proxy/schedule_predictor", self._proxy_handle_schedule_predictor),
+                web.post("/dashboard/proxy/audience_overlap", self._proxy_handle_audience_overlap),
+                web.post("/dashboard/proxy/collaboration_matcher", self._proxy_handle_collaboration_matcher),
+                web.post("/dashboard/proxy/community_health", self._proxy_handle_community_health),
                 # Internal local-only API (blocked by middleware)
                 web.get("/api/guild/{guild_id}/member/{member_id}", self._handle_member_stats),
                 web.get("/api/guild/{guild_id}/top", self._handle_top),
@@ -1407,3 +1420,683 @@ class StreamRoles(commands.Cog):
         results.sort(key=lambda x: x["total_time_seconds"], reverse=True)
 
         return web.json_response(results)
+
+    async def _proxy_handle_badges(self, request: web.Request):
+        """
+        POST /dashboard/proxy/badges/{guild_id}/{member_id}
+        Returns badges for a specific member.
+        """
+        member_id = request.match_info.get("member_id")
+        guild = None
+        if request.match_info.get("guild_id"):
+            try:
+                guild = self.bot.get_guild(int(request.match_info.get("guild_id")))
+            except Exception:
+                guild = None
+        
+        if guild is None:
+            for g in self.bot.guilds:
+                try:
+                    fixed = await self.conf.guild(g).fixed_guild_id()
+                except Exception:
+                    fixed = None
+                if fixed:
+                    try:
+                        if int(fixed) == g.id:
+                            guild = g
+                            break
+                    except Exception:
+                        guild = g
+                        break
+
+        if not guild:
+            return web.Response(status=400, text="guild_id required or no fixed_guild_id configured")
+
+        if not member_id:
+            return web.Response(status=400, text="member_id required")
+        
+        member = guild.get_member(int(member_id))
+        if not member:
+            return web.Response(status=404, text="Member not found")
+
+        token = await self.conf.guild(guild).api_token()
+        if not token:
+            return web.Response(status=403, text="No API token configured for this guild")
+
+        sessions = await self._get_member_sessions(member, guild)
+        badges = calculate_member_badges(sessions)
+        
+        return web.json_response(badges)
+
+    async def _proxy_handle_achievements(self, request: web.Request):
+        """
+        POST /dashboard/proxy/achievements
+        Returns guild-wide achievements with current holders.
+        """
+        payload = {}
+        if request.content_length:
+            try:
+                payload = await request.json()
+            except Exception:
+                log.exception("Invalid JSON body for /dashboard/proxy/achievements")
+                payload = {}
+
+        # resolve guild
+        guild = None
+        if payload.get("guild_id"):
+            try:
+                guild = self.bot.get_guild(int(payload.get("guild_id")))
+            except Exception:
+                guild = None
+
+        if guild is None:
+            for g in self.bot.guilds:
+                try:
+                    fixed = await self.conf.guild(g).fixed_guild_id()
+                except Exception:
+                    fixed = None
+                if fixed:
+                    try:
+                        if int(fixed) == g.id:
+                            guild = g
+                            break
+                    except Exception:
+                        guild = g
+                        break
+
+        if not guild:
+            return web.Response(status=400, text="guild_id required or no fixed_guild_id configured")
+
+        token = await self.conf.guild(guild).api_token()
+        if not token:
+            return web.Response(status=403, text="No API token configured for this guild")
+
+        # Collect all member data
+        all_member_data = {}
+        for member in guild.members:
+            sessions = await self._get_member_sessions(member, guild)
+            if sessions:
+                all_member_data[member.id] = {
+                    "sessions": sessions,
+                    "display_name": member.display_name
+                }
+        
+        achievements = calculate_guild_achievements(all_member_data)
+        
+        return web.json_response(achievements)
+
+    async def _proxy_handle_badges_batch(self, request: web.Request):
+        """
+        POST /dashboard/proxy/badges_batch
+        Returns badges for multiple members in a single request.
+        Payload: { member_ids: [id1, id2, ...] }
+        """
+        payload = {}
+        if request.content_length:
+            try:
+                payload = await request.json()
+            except Exception:
+                log.exception("Invalid JSON body for /dashboard/proxy/badges_batch")
+                payload = {}
+
+        # resolve guild
+        guild = None
+        if payload.get("guild_id"):
+            try:
+                guild = self.bot.get_guild(int(payload.get("guild_id")))
+            except Exception:
+                guild = None
+
+        if guild is None:
+            for g in self.bot.guilds:
+                try:
+                    fixed = await self.conf.guild(g).fixed_guild_id()
+                except Exception:
+                    fixed = None
+                if fixed:
+                    try:
+                        if int(fixed) == g.id:
+                            guild = g
+                            break
+                    except Exception:
+                        guild = g
+                        break
+
+        if not guild:
+            return web.Response(status=400, text="guild_id required or no fixed_guild_id configured")
+
+        token = await self.conf.guild(guild).api_token()
+        if not token:
+            return web.Response(status=403, text="No API token configured for this guild")
+
+        member_ids = payload.get("member_ids", [])
+        if not member_ids:
+            return web.Response(status=400, text="member_ids required")
+
+        # Fetch badges for all members
+        result = {}
+        for member_id in member_ids:
+            try:
+                member = guild.get_member(int(member_id))
+                if member:
+                    sessions = await self._get_member_sessions(member, guild)
+                    badges = calculate_member_badges(sessions)
+                    
+                    # Calculate summary
+                    earned = sum(1 for b in badges.values() if b["earned"])
+                    total = len(badges)
+                    
+                    result[str(member_id)] = {
+                        "earned": earned,
+                        "total": total,
+                        "badges": badges
+                    }
+            except Exception as e:
+                log.exception(f"Error fetching badges for member {member_id}: {e}")
+                continue
+
+        return web.json_response(result)
+
+    async def _proxy_handle_schedule_predictor(self, request: web.Request):
+        """
+        POST /dashboard/proxy/schedule_predictor
+        Returns optimal streaming schedule predictions based on historical data.
+        """
+        payload = {}
+        if request.content_length:
+            try:
+                payload = await request.json()
+            except Exception:
+                log.exception("Invalid JSON body for /dashboard/proxy/schedule_predictor")
+                payload = {}
+
+        # resolve guild
+        guild = None
+        if payload.get("guild_id"):
+            try:
+                guild = self.bot.get_guild(int(payload.get("guild_id")))
+            except Exception:
+                guild = None
+
+        if guild is None:
+            for g in self.bot.guilds:
+                try:
+                    fixed = await self.conf.guild(g).fixed_guild_id()
+                except Exception:
+                    fixed = None
+                if fixed:
+                    try:
+                        if int(fixed) == g.id:
+                            guild = g
+                            break
+                    except Exception:
+                        guild = g
+                        break
+
+        if not guild:
+            return web.Response(status=400, text="guild_id required or no fixed_guild_id configured")
+
+        token = await self.conf.guild(guild).api_token()
+        if not token:
+            return web.Response(status=403, text="No API token configured for this guild")
+
+        member_id = payload.get("member_id")
+        if not member_id:
+            return web.Response(status=400, text="member_id required")
+        
+        member = guild.get_member(int(member_id))
+        if not member:
+            return web.Response(status=404, text="Member not found")
+
+        sessions = await self._get_member_sessions(member, guild)
+        
+        # Analyze streaming patterns
+        day_hour_counts = {}
+        for day in range(7):
+            day_hour_counts[day] = {}
+            for hour in range(24):
+                day_hour_counts[day][hour] = 0
+        
+        for session in sessions:
+            start = session.get("start")
+            if not start:
+                continue
+            dt = time.gmtime(start)
+            day_of_week = (dt.tm_wday + 1) % 7
+            hour = dt.tm_hour
+            day_hour_counts[day_of_week][hour] += 1
+        
+        # Find top 5 time slots
+        all_slots = []
+        for day in range(7):
+            for hour in range(24):
+                count = day_hour_counts[day][hour]
+                if count > 0:
+                    all_slots.append({
+                        "day": day,
+                        "hour": hour,
+                        "count": count,
+                        "day_name": ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][day]
+                    })
+        
+        all_slots.sort(key=lambda x: x["count"], reverse=True)
+        top_slots = all_slots[:5]
+        
+        # Calculate suggested times (times with low community activity)
+        community_activity = {}
+        for day in range(7):
+            community_activity[day] = {}
+            for hour in range(24):
+                community_activity[day][hour] = 0
+        
+        for m in guild.members:
+            m_sessions = await self._get_member_sessions(m, guild)
+            for session in m_sessions:
+                start = session.get("start")
+                if not start:
+                    continue
+                dt = time.gmtime(start)
+                day_of_week = (dt.tm_wday + 1) % 7
+                hour = dt.tm_hour
+                community_activity[day_of_week][hour] += 1
+        
+        # Find low-activity slots
+        low_activity_slots = []
+        for day in range(7):
+            for hour in range(24):
+                # Prefer reasonable streaming hours (8am - 2am, which is 8-23 or 0-2)
+                if (8 <= hour <= 23) or (0 <= hour <= 2):
+                    low_activity_slots.append({
+                        "day": day,
+                        "hour": hour,
+                        "community_count": community_activity[day][hour],
+                        "day_name": ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][day]
+                    })
+        
+        low_activity_slots.sort(key=lambda x: x["community_count"])
+        suggested_slots = low_activity_slots[:5]
+        
+        return web.json_response({
+            "member_id": member.id,
+            "display_name": member.display_name,
+            "top_performing_times": top_slots,
+            "suggested_low_competition_times": suggested_slots
+        })
+
+    async def _proxy_handle_audience_overlap(self, request: web.Request):
+        """
+        POST /dashboard/proxy/audience_overlap
+        Returns audience overlap analysis showing which streamers share similar time slots.
+        """
+        payload = {}
+        if request.content_length:
+            try:
+                payload = await request.json()
+            except Exception:
+                log.exception("Invalid JSON body for /dashboard/proxy/audience_overlap")
+                payload = {}
+
+        # resolve guild
+        guild = None
+        if payload.get("guild_id"):
+            try:
+                guild = self.bot.get_guild(int(payload.get("guild_id")))
+            except Exception:
+                guild = None
+
+        if guild is None:
+            for g in self.bot.guilds:
+                try:
+                    fixed = await self.conf.guild(g).fixed_guild_id()
+                except Exception:
+                    fixed = None
+                if fixed:
+                    try:
+                        if int(fixed) == g.id:
+                            guild = g
+                            break
+                    except Exception:
+                        guild = g
+                        break
+
+        if not guild:
+            return web.Response(status=400, text="guild_id required or no fixed_guild_id configured")
+
+        token = await self.conf.guild(guild).api_token()
+        if not token:
+            return web.Response(status=403, text="No API token configured for this guild")
+
+        member_id = payload.get("member_id")
+        if not member_id:
+            return web.Response(status=400, text="member_id required")
+        
+        target_member = guild.get_member(int(member_id))
+        if not target_member:
+            return web.Response(status=404, text="Member not found")
+
+        target_sessions = await self._get_member_sessions(target_member, guild)
+        
+        # Build target member's streaming time slots
+        target_slots = set()
+        for session in target_sessions:
+            start = session.get("start")
+            if not start:
+                continue
+            dt = time.gmtime(start)
+            day_of_week = (dt.tm_wday + 1) % 7
+            hour = dt.tm_hour
+            target_slots.add((day_of_week, hour))
+        
+        # Calculate overlap with other members
+        overlaps = []
+        for member in guild.members:
+            if member.id == target_member.id:
+                continue
+            
+            sessions = await self._get_member_sessions(member, guild)
+            if not sessions:
+                continue
+            
+            member_slots = set()
+            for session in sessions:
+                start = session.get("start")
+                if not start:
+                    continue
+                dt = time.gmtime(start)
+                day_of_week = (dt.tm_wday + 1) % 7
+                hour = dt.tm_hour
+                member_slots.add((day_of_week, hour))
+            
+            # Calculate overlap percentage
+            if not member_slots:
+                continue
+            
+            overlap = len(target_slots & member_slots)
+            if overlap > 0:
+                overlap_pct = (overlap / len(target_slots)) * 100
+                overlaps.append({
+                    "member_id": member.id,
+                    "display_name": member.display_name,
+                    "overlap_count": overlap,
+                    "overlap_percentage": round(overlap_pct, 1)
+                })
+        
+        overlaps.sort(key=lambda x: x["overlap_percentage"], reverse=True)
+        
+        return web.json_response({
+            "member_id": target_member.id,
+            "display_name": target_member.display_name,
+            "overlaps": overlaps[:10]  # Top 10
+        })
+
+    async def _proxy_handle_collaboration_matcher(self, request: web.Request):
+        """
+        POST /dashboard/proxy/collaboration_matcher
+        Suggests streamers for potential collaborations based on compatible schedules.
+        """
+        payload = {}
+        if request.content_length:
+            try:
+                payload = await request.json()
+            except Exception:
+                log.exception("Invalid JSON body for /dashboard/proxy/collaboration_matcher")
+                payload = {}
+
+        # resolve guild
+        guild = None
+        if payload.get("guild_id"):
+            try:
+                guild = self.bot.get_guild(int(payload.get("guild_id")))
+            except Exception:
+                guild = None
+
+        if guild is None:
+            for g in self.bot.guilds:
+                try:
+                    fixed = await self.conf.guild(g).fixed_guild_id()
+                except Exception:
+                    fixed = None
+                if fixed:
+                    try:
+                        if int(fixed) == g.id:
+                            guild = g
+                            break
+                    except Exception:
+                        guild = g
+                        break
+
+        if not guild:
+            return web.Response(status=400, text="guild_id required or no fixed_guild_id configured")
+
+        token = await self.conf.guild(guild).api_token()
+        if not token:
+            return web.Response(status=403, text="No API token configured for this guild")
+
+        member_id = payload.get("member_id")
+        if not member_id:
+            return web.Response(status=400, text="member_id required")
+        
+        target_member = guild.get_member(int(member_id))
+        if not target_member:
+            return web.Response(status=404, text="Member not found")
+
+        target_sessions = await self._get_member_sessions(target_member, guild)
+        
+        # Build target member's streaming time slots
+        target_slots = set()
+        for session in target_sessions:
+            start = session.get("start")
+            if not start:
+                continue
+            dt = time.gmtime(start)
+            day_of_week = (dt.tm_wday + 1) % 7
+            hour = dt.tm_hour
+            target_slots.add((day_of_week, hour))
+        
+        # Find members with COMPLEMENTARY schedules (low overlap = good for collabs)
+        matches = []
+        for member in guild.members:
+            if member.id == target_member.id:
+                continue
+            
+            sessions = await self._get_member_sessions(member, guild)
+            if not sessions:
+                continue
+            
+            member_slots = set()
+            for session in sessions:
+                start = session.get("start")
+                if not start:
+                    continue
+                dt = time.gmtime(start)
+                day_of_week = (dt.tm_wday + 1) % 7
+                hour = dt.tm_hour
+                member_slots.add((day_of_week, hour))
+            
+            if not member_slots:
+                continue
+            
+            # Calculate complementarity (lower overlap = better for collab)
+            overlap = len(target_slots & member_slots)
+            total_unique = len(target_slots | member_slots)
+            
+            if total_unique > 0:
+                # Complementarity score: 0 = total overlap, 100 = no overlap
+                complementarity = ((total_unique - overlap) / total_unique) * 100
+                
+                # Also consider activity level (prefer active streamers)
+                activity_score = min(len(sessions) / 10.0, 1.0) * 100
+                
+                # Combined score
+                combined_score = (complementarity * 0.7) + (activity_score * 0.3)
+                
+                matches.append({
+                    "member_id": member.id,
+                    "display_name": member.display_name,
+                    "complementarity_score": round(complementarity, 1),
+                    "activity_score": round(activity_score, 1),
+                    "match_score": round(combined_score, 1),
+                    "total_streams": len(sessions)
+                })
+        
+        matches.sort(key=lambda x: x["match_score"], reverse=True)
+        
+        return web.json_response({
+            "member_id": target_member.id,
+            "display_name": target_member.display_name,
+            "suggested_collaborators": matches[:10]  # Top 10
+        })
+
+    async def _proxy_handle_community_health(self, request: web.Request):
+        """
+        POST /dashboard/proxy/community_health
+        Returns overall community health metrics.
+        """
+        payload = {}
+        if request.content_length:
+            try:
+                payload = await request.json()
+            except Exception:
+                log.exception("Invalid JSON body for /dashboard/proxy/community_health")
+                payload = {}
+
+        # resolve guild
+        guild = None
+        if payload.get("guild_id"):
+            try:
+                guild = self.bot.get_guild(int(payload.get("guild_id")))
+            except Exception:
+                guild = None
+
+        if guild is None:
+            for g in self.bot.guilds:
+                try:
+                    fixed = await self.conf.guild(g).fixed_guild_id()
+                except Exception:
+                    fixed = None
+                if fixed:
+                    try:
+                        if int(fixed) == g.id:
+                            guild = g
+                            break
+                    except Exception:
+                        guild = g
+                        break
+
+        if not guild:
+            return web.Response(status=400, text="guild_id required or no fixed_guild_id configured")
+
+        token = await self.conf.guild(guild).api_token()
+        if not token:
+            return web.Response(status=403, text="No API token configured for this guild")
+
+        period = payload.get("period", "30d")
+        cutoff = self._parse_period(period)
+        if cutoff is None:
+            return web.Response(status=400, text="Invalid period")
+
+        # Collect community-wide metrics
+        total_streamers = 0
+        total_streams = 0
+        total_time = 0
+        active_members = []
+        member_sessions_cache = {}  # Cache sessions to avoid re-fetching
+        
+        now = int(time.time())
+        recent_cutoff = now - (7 * 86400)  # Last 7 days
+        
+        for member in guild.members:
+            sessions = await self._get_member_sessions(member, guild)
+            member_sessions_cache[member.id] = sessions  # Cache for later use
+            
+            if cutoff:
+                filtered = [s for s in sessions if s.get("start", 0) >= cutoff]
+            else:
+                filtered = sessions
+            
+            if not filtered:
+                continue
+            
+            total_streamers += 1
+            total_streams += len(filtered)
+            member_time = sum(s.get("duration", 0) for s in filtered)
+            total_time += member_time
+            
+            # Check if active in last 7 days
+            recent_sessions = [s for s in sessions if s.get("start", 0) >= recent_cutoff]
+            if recent_sessions:
+                active_members.append(member.id)
+        
+        # Calculate metrics
+        avg_streams_per_member = total_streams / total_streamers if total_streamers else 0
+        avg_time_per_member = total_time / total_streamers if total_streamers else 0
+        active_member_pct = (len(active_members) / total_streamers * 100) if total_streamers else 0
+        
+        # Calculate growth (compare with previous period) using cached sessions
+        prev_streamers = 0
+        prev_streams = 0
+        
+        if period.endswith("d"):
+            days = int(period[:-1])
+            prev_cutoff = cutoff - (days * 86400)
+            
+            # Use cached sessions from first loop
+            for member_id, sessions in member_sessions_cache.items():
+                prev_filtered = [s for s in sessions if prev_cutoff <= s.get("start", 0) < cutoff]
+                
+                if prev_filtered:
+                    prev_streamers += 1
+                    prev_streams += len(prev_filtered)
+        
+        streamer_growth = ((total_streamers - prev_streamers) / prev_streamers * 100) if prev_streamers else 0
+        stream_growth = ((total_streams - prev_streams) / prev_streams * 100) if prev_streams else 0
+        
+        # Calculate health score (0-100)
+        # Factors: active member %, avg streams, consistency
+        activity_score = min(active_member_pct, 100) * 0.4
+        volume_score = min(avg_streams_per_member / 10.0, 1.0) * 100 * 0.3
+        growth_score = min(max(streamer_growth, 0) / 50.0, 1.0) * 100 * 0.3
+        
+        health_score = activity_score + volume_score + growth_score
+        
+        return web.json_response({
+            "period": period,
+            "total_streamers": total_streamers,
+            "active_last_7_days": len(active_members),
+            "active_percentage": round(active_member_pct, 1),
+            "total_streams": total_streams,
+            "total_hours": round(total_time / 3600, 1),
+            "avg_streams_per_member": round(avg_streams_per_member, 1),
+            "avg_hours_per_member": round(avg_time_per_member / 3600, 1),
+            "streamer_growth_pct": round(streamer_growth, 1),
+            "stream_growth_pct": round(stream_growth, 1),
+            "health_score": round(health_score, 1),
+            "health_grade": self._get_health_grade(health_score)
+        })
+    
+    def _get_health_grade(self, score: float) -> str:
+        """Convert health score to letter grade."""
+        if score >= 90:
+            return "A+"
+        elif score >= 85:
+            return "A"
+        elif score >= 80:
+            return "A-"
+        elif score >= 75:
+            return "B+"
+        elif score >= 70:
+            return "B"
+        elif score >= 65:
+            return "B-"
+        elif score >= 60:
+            return "C+"
+        elif score >= 55:
+            return "C"
+        elif score >= 50:
+            return "C-"
+        elif score >= 45:
+            return "D+"
+        elif score >= 40:
+            return "D"
+        else:
+            return "F"
