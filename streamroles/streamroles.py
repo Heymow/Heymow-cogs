@@ -995,9 +995,10 @@ class StreamRoles(commands.Cog):
         if not react_ui_available:
             if not os.path.isdir(react_build_dir):
                 log.warning("React build directory not found at: %s", react_build_dir)
+                log.warning("React UI will not be available. Place the React build in streamroles/static/react-build to enable the UI.")
             elif not os.path.isdir(assets_dir):
                 log.warning("React assets directory not found at: %s", assets_dir)
-            log.warning("React UI will not be available. Place the React build in streamroles/static/react-build to enable the UI.")
+                log.warning("React UI will not be available. Place the React build in streamroles/static/react-build to enable the UI.")
         
         # Build routes list
         routes = [
