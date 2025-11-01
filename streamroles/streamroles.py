@@ -1004,6 +1004,18 @@ class StreamRoles(commands.Cog):
             web.get("/", self._handle_index),
             web.get("/dashboard", self._handle_dashboard),
             web.get("/dashboard/react", self._handle_react_dashboard),
+        ]
+        
+        # Only add static route if React build is available, otherwise add fallback
+        if react_ui_available:
+            routes.append(web.static("/dashboard/react/assets", assets_dir))
+            log.info("React UI assets mounted successfully")
+        else:
+            # Add fallback route to inform about missing UI
+            routes.append(web.get("/dashboard/react/ui-missing", self._handle_ui_missing))
+        
+        # Add remaining routes
+        routes.extend([
             web.post("/dashboard/proxy/top", self._proxy_handle_top),
             web.post("/dashboard/proxy/member/{guild_id}/{member_id}", self._proxy_handle_member),
             web.post("/dashboard/proxy/export/{guild_id}/{member_id}", self._proxy_handle_export),
@@ -1020,15 +1032,7 @@ class StreamRoles(commands.Cog):
             web.get("/api/guild/{guild_id}/member/{member_id}", self._handle_member_stats),
             web.get("/api/guild/{guild_id}/top", self._handle_top),
             web.get("/api/guild/{guild_id}/export/member/{member_id}", self._handle_export_csv),
-        ]
-        
-        # Only add static route if React build is available
-        if react_ui_available:
-            routes.insert(3, web.static("/dashboard/react/assets", assets_dir))
-            log.info("React UI assets mounted successfully")
-        else:
-            # Add fallback route to inform about missing UI
-            routes.insert(3, web.get("/streamroles/ui-missing", self._handle_ui_missing))
+        ])
         
         # Public dashboard + proxy routes (public)
         app.add_routes(routes)
@@ -1155,7 +1159,8 @@ class StreamRoles(commands.Cog):
         return web.json_response({
             "error": "UI not available",
             "message": "The React UI build is missing. Please build the React dashboard and place it in streamroles/static/react-build to enable the UI.",
-            "instructions": "Run 'npm run build' in the react-dashboard directory and copy the build output to streamroles/static/react-build/"
+            "instructions": "Run 'npm run build' in the react-dashboard directory and copy the build output to streamroles/static/react-build/",
+            "path": "/dashboard/react/ui-missing"
         }, status=503)
 
     async def _handle_member_stats(self, request: web.Request):
