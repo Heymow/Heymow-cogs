@@ -488,6 +488,196 @@
       border: 1px solid rgba(74, 124, 89, 0.3);
     }
 
+    /* Badge and Achievement styles */
+    .achievements-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 20px;
+      margin-bottom: 20px;
+    }
+
+    .achievement-card {
+      background: rgba(45, 74, 48, 0.5);
+      border-radius: 12px;
+      padding: 20px;
+      border: 2px solid rgba(74, 124, 89, 0.3);
+      transition: all 0.3s ease;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .achievement-card.has-holder {
+      border-color: var(--accent-green);
+      background: rgba(61, 107, 77, 0.3);
+    }
+
+    .achievement-card:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+    }
+
+    .achievement-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .achievement-emoji {
+      font-size: 2.5rem;
+    }
+
+    .achievement-info h4 {
+      color: var(--text-primary);
+      font-size: 1.1rem;
+      margin-bottom: 5px;
+    }
+
+    .achievement-info p {
+      color: var(--text-secondary);
+      font-size: 0.9rem;
+    }
+
+    .achievement-holder {
+      background: rgba(74, 124, 89, 0.3);
+      padding: 12px;
+      border-radius: 8px;
+      margin-top: 12px;
+      text-align: center;
+    }
+
+    .achievement-holder-name {
+      color: var(--text-primary);
+      font-weight: 600;
+      font-size: 1.05rem;
+    }
+
+    .achievement-holder-value {
+      color: var(--accent-green);
+      font-weight: 700;
+      font-size: 1.2rem;
+      margin-top: 5px;
+    }
+
+    .badges-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 15px;
+      margin-top: 20px;
+    }
+
+    .badge-card {
+      background: rgba(45, 74, 48, 0.4);
+      border-radius: 10px;
+      padding: 15px;
+      border: 2px solid rgba(74, 124, 89, 0.3);
+      transition: all 0.3s ease;
+      position: relative;
+      text-align: center;
+    }
+
+    .badge-card.earned {
+      border-color: var(--accent-green);
+      background: rgba(61, 107, 77, 0.3);
+    }
+
+    .badge-card.locked {
+      opacity: 0.5;
+      filter: grayscale(100%);
+    }
+
+    .badge-card:hover {
+      transform: scale(1.05);
+    }
+
+    .badge-emoji {
+      font-size: 2.5rem;
+      margin-bottom: 8px;
+    }
+
+    .badge-name {
+      color: var(--text-primary);
+      font-weight: 600;
+      font-size: 1rem;
+      margin-bottom: 5px;
+    }
+
+    .badge-description {
+      color: var(--text-secondary);
+      font-size: 0.85rem;
+      margin-bottom: 8px;
+    }
+
+    .badge-progress {
+      margin-top: 10px;
+    }
+
+    .badge-progress-bar {
+      background: rgba(29, 74, 48, 0.8);
+      height: 6px;
+      border-radius: 3px;
+      overflow: hidden;
+      margin-bottom: 5px;
+    }
+
+    .badge-progress-fill {
+      background: var(--accent-green);
+      height: 100%;
+      transition: width 0.3s ease;
+    }
+
+    .badge-progress-text {
+      color: var(--text-secondary);
+      font-size: 0.75rem;
+    }
+
+    .badge-category {
+      display: inline-block;
+      background: rgba(74, 124, 89, 0.5);
+      color: var(--text-primary);
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-size: 0.7rem;
+      margin-top: 5px;
+    }
+
+    .insight-card {
+      background: rgba(45, 74, 48, 0.4);
+      border-radius: 10px;
+      padding: 20px;
+      border: 1px solid rgba(74, 124, 89, 0.3);
+      margin-bottom: 20px;
+    }
+
+    .insight-card h3 {
+      color: var(--text-primary);
+      font-size: 1.2rem;
+      margin-bottom: 15px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .insight-list {
+      list-style: none;
+      padding: 0;
+    }
+
+    .insight-list li {
+      color: var(--text-secondary);
+      padding: 10px 0;
+      border-bottom: 1px solid rgba(74, 124, 89, 0.2);
+    }
+
+    .insight-list li:last-child {
+      border-bottom: none;
+    }
+
+    .insight-value {
+      color: var(--accent-green);
+      font-weight: 600;
+    }
+
     @media (max-width: 768px) {
       h1 {
         font-size: 2rem;
@@ -507,6 +697,14 @@
 
       .control-group {
         width: 100%;
+      }
+
+      .badges-grid {
+        grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+      }
+
+      .achievements-grid {
+        grid-template-columns: 1fr;
       }
     }
   </style>
@@ -563,6 +761,7 @@
       <button class="tab" onclick="switchTab('heatmap')">🗓️ Weekly Heatmap</button>
       <button class="tab" onclick="switchTab('streamers')">👥 All Streamers</button>
       <button class="tab" onclick="switchTab('details')">📈 Streamer Details</button>
+      <button class="tab" onclick="switchTab('badges')">🏆 Badges & Achievements</button>
       <button class="tab" onclick="switchTab('insights')">💡 Insights</button>
     </div>
 
@@ -673,6 +872,36 @@
       </div>
     </div>
 
+    <!-- Badges & Achievements Tab -->
+    <div id="badges-tab" class="tab-content">
+      <div class="dashboard-card">
+        <h2 class="chart-title">Badges & Achievements</h2>
+        
+        <!-- Community Achievements Section -->
+        <div style="margin-bottom: 40px;">
+          <h3 style="color: var(--text-primary); font-size: 1.3rem; margin-bottom: 20px;">🏅 Community Achievements</h3>
+          <p style="color: var(--text-secondary); margin-bottom: 20px;">These prestigious titles go to the top performers in our community!</p>
+          <div id="achievementsList" class="achievements-grid">
+            <div class="loading">Loading achievements...</div>
+          </div>
+        </div>
+
+        <!-- Member Badges Section -->
+        <div>
+          <h3 style="color: var(--text-primary); font-size: 1.3rem; margin-bottom: 20px;">🏆 Member Badges</h3>
+          <div style="margin-bottom: 20px;">
+            <label for="badgeStreamerSelect" style="margin-right: 10px;">Select Streamer:</label>
+            <select id="badgeStreamerSelect" style="min-width: 200px;" onchange="loadMemberBadges()">
+              <option value="">-- Choose a streamer --</option>
+            </select>
+          </div>
+          <div id="badgesContent">
+            <p style="text-align: center; color: var(--text-secondary);">Select a streamer to view their badges.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <footer>
       <p>© <span id="currentYear"></span> Heymow • SoundGarden Stream Stats</p>
       <p style="margin-top: 10px; font-size: 0.85rem;">Track your growth, optimize your schedule, and connect with the community! 🎵</p>
@@ -719,7 +948,8 @@
         'heatmap': 1,
         'streamers': 2,
         'details': 3,
-        'insights': 4
+        'badges': 4,
+        'insights': 5
       };
       const tabIndex = tabButtons[tabName] || 0;
       document.querySelectorAll('.tab')[tabIndex]?.classList.add('active');
@@ -741,6 +971,9 @@
           document.getElementById('streamerSelect').value = selectedMemberId;
           loadStreamerDetails();
         }
+      } else if (tabName === 'badges') {
+        loadAchievements();
+        populateBadgeStreamerSelect();
       } else if (tabName === 'insights') {
         generateInsights();
       }
@@ -1037,7 +1270,26 @@
         const data = await resp.json();
         cachedData.allMembers = data;
         
-        renderStreamersList(data);
+        // Fetch badge counts for each streamer
+        const badgeCounts = {};
+        for (const streamer of data.slice(0, 20)) {  // Limit to top 20 for performance
+          try {
+            const badgeResp = await fetch(`/dashboard/proxy/badges/0/${streamer.member_id}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({})
+            });
+            if (badgeResp.ok) {
+              const badges = await badgeResp.json();
+              const earned = Object.values(badges).filter(b => b.earned).length;
+              badgeCounts[streamer.member_id] = { earned, total: Object.keys(badges).length };
+            }
+          } catch (e) {
+            console.error('Error fetching badges for', streamer.display_name, e);
+          }
+        }
+        
+        renderStreamersList(data, badgeCounts);
         
       } catch (error) {
         console.error('Error fetching streamers:', error);
@@ -1045,7 +1297,7 @@
       }
     }
 
-    function renderStreamersList(data) {
+    function renderStreamersList(data, badgeCounts = {}) {
       const streamersList = document.getElementById('streamersList');
       
       if (data.length === 0) {
@@ -1064,6 +1316,12 @@
         const roleClass = streamer.role ? `role-${streamer.role}` : '';
         const roleIcon = getRoleIcon(streamer.role);
         
+        let badgeInfo = '';
+        if (badgeCounts[streamer.member_id]) {
+          const { earned, total } = badgeCounts[streamer.member_id];
+          badgeInfo = `<span title="Badges Earned">🏆 ${earned}/${total}</span>`;
+        }
+        
         item.innerHTML = `
           <div class="streamer-info">
             <div class="role-badge ${roleClass}">${roleIcon}</div>
@@ -1074,6 +1332,7 @@
           <div class="streamer-stats">
             <span>${streamer.total_time_hours}h</span>
             <span>${streamer.total_streams} streams</span>
+            ${badgeInfo}
           </div>
         `;
         
@@ -1110,8 +1369,24 @@
         ]);
       }
       
-      const insights = analyzeData();
-      renderInsights(insights);
+      // Fetch community health data
+      let communityHealth = null;
+      try {
+        const period = document.getElementById('period').value;
+        const resp = await fetch('/dashboard/proxy/community_health', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ period: period })
+        });
+        if (resp.ok) {
+          communityHealth = await resp.json();
+        }
+      } catch (error) {
+        console.error('Error fetching community health:', error);
+      }
+      
+      const insights = analyzeData(communityHealth);
+      renderInsights(insights, communityHealth);
     }
 
     async function fetchTopData() {
@@ -1144,8 +1419,26 @@
       cachedData.allMembers = await resp.json();
     }
 
-    function analyzeData() {
+    function analyzeData(communityHealth) {
       const insights = [];
+      
+      // Community Health Score
+      if (communityHealth) {
+        insights.push({
+          title: '💚 Community Health Score',
+          description: `Overall health: ${communityHealth.health_score.toFixed(1)}/100 (Grade: ${communityHealth.health_grade})`,
+          stats: [
+            `Active Streamers: ${communityHealth.total_streamers}`,
+            `Active in Last 7 Days: ${communityHealth.active_last_7_days} (${communityHealth.active_percentage}%)`,
+            `Total Streams: ${communityHealth.total_streams}`,
+            `Total Hours: ${communityHealth.total_hours}h`,
+            `Growth: ${communityHealth.streamer_growth_pct > 0 ? '+' : ''}${communityHealth.streamer_growth_pct}% streamers, ${communityHealth.stream_growth_pct > 0 ? '+' : ''}${communityHealth.stream_growth_pct}% streams`
+          ],
+          recommendation: communityHealth.health_score >= 70 ? 
+            'Community is healthy and growing! Keep up the great work.' :
+            'Consider initiatives to boost engagement and encourage more regular streaming.'
+        });
+      }
       
       // Peak streaming time
       if (cachedData.heatmap && cachedData.heatmap.length > 0) {
@@ -1206,17 +1499,28 @@
       return insights;
     }
 
-    function renderInsights(insights) {
+    function renderInsights(insights, communityHealth) {
       const insightsContent = document.getElementById('insightsContent');
       insightsContent.innerHTML = '';
       
       insights.forEach(insight => {
         const card = document.createElement('div');
-        card.style.cssText = 'background: rgba(45, 74, 48, 0.4); border: 1px solid rgba(74, 124, 89, 0.3); border-radius: 12px; padding: 25px; margin-bottom: 20px;';
+        card.className = 'insight-card';
+        
+        let statsHtml = '';
+        if (insight.stats) {
+          statsHtml = '<ul class="insight-list">';
+          insight.stats.forEach(stat => {
+            statsHtml += `<li>${stat}</li>`;
+          });
+          statsHtml += '</ul>';
+        }
+        
         card.innerHTML = `
           <h3 style="color: var(--accent-green); margin-bottom: 12px; font-size: 1.2rem;">${insight.title}</h3>
           <p style="color: var(--text-primary); margin-bottom: 12px; line-height: 1.6;">${insight.description}</p>
-          <p style="color: var(--text-secondary); font-style: italic; line-height: 1.6;">💡 ${insight.recommendation}</p>
+          ${statsHtml}
+          <p style="color: var(--text-secondary); font-style: italic; line-height: 1.6; margin-top: 12px;">💡 ${insight.recommendation}</p>
         `;
         insightsContent.appendChild(card);
       });
@@ -1428,6 +1732,193 @@
             }
           }
         }
+      });
+    }
+
+    // Badge and Achievement Functions
+    async function loadAchievements() {
+      const container = document.getElementById('achievementsList');
+      container.innerHTML = '<div class="loading">Loading achievements...</div>';
+      
+      try {
+        const resp = await fetch('/dashboard/proxy/achievements', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({})
+        });
+        
+        if (!resp.ok) {
+          throw new Error('Failed to load achievements');
+        }
+        
+        const achievements = await resp.json();
+        renderAchievements(achievements);
+      } catch (error) {
+        console.error('Error loading achievements:', error);
+        container.innerHTML = '<p style="text-align: center; color: var(--text-secondary);">Error loading achievements.</p>';
+      }
+    }
+
+    function renderAchievements(achievements) {
+      const container = document.getElementById('achievementsList');
+      container.innerHTML = '';
+      
+      Object.values(achievements).forEach(achievement => {
+        const card = document.createElement('div');
+        card.className = 'achievement-card' + (achievement.has_holder ? ' has-holder' : '');
+        
+        let holderHtml = '';
+        if (achievement.has_holder) {
+          let valueText = achievement.value.toFixed(1);
+          if (achievement.id.includes('longest') || achievement.id.includes('time') || achievement.id.includes('week') || achievement.id.includes('month')) {
+            valueText += ' hours';
+          } else if (achievement.id.includes('stream') && !achievement.id.includes('time')) {
+            valueText += ' streams';
+          } else {
+            valueText += ' days';
+          }
+          
+          holderHtml = `
+            <div class="achievement-holder">
+              <div class="achievement-holder-name">🏆 ${achievement.holder_name}</div>
+              <div class="achievement-holder-value">${valueText}</div>
+            </div>
+          `;
+        } else {
+          holderHtml = `
+            <div class="achievement-holder" style="background: rgba(74, 74, 74, 0.3);">
+              <div class="achievement-holder-name" style="color: var(--text-secondary);">🔒 Unclaimed</div>
+              <div class="achievement-holder-value" style="color: var(--text-secondary);">Minimum: ${achievement.minimum_value}</div>
+            </div>
+          `;
+        }
+        
+        card.innerHTML = `
+          <div class="achievement-header">
+            <div class="achievement-emoji">${achievement.emoji}</div>
+            <div class="achievement-info">
+              <h4>${achievement.name}</h4>
+              <p>${achievement.description}</p>
+            </div>
+          </div>
+          ${holderHtml}
+        `;
+        
+        container.appendChild(card);
+      });
+    }
+
+    async function populateBadgeStreamerSelect() {
+      if (!cachedData.allMembers) {
+        await fetchAllMembersData();
+      }
+      
+      const select = document.getElementById('badgeStreamerSelect');
+      select.innerHTML = '<option value="">-- Choose a streamer --</option>';
+      
+      if (cachedData.allMembers) {
+        cachedData.allMembers.forEach(member => {
+          const option = document.createElement('option');
+          option.value = member.member_id;
+          option.textContent = member.display_name;
+          select.appendChild(option);
+        });
+      }
+    }
+
+    async function loadMemberBadges() {
+      const memberId = document.getElementById('badgeStreamerSelect').value;
+      const content = document.getElementById('badgesContent');
+      
+      if (!memberId) {
+        content.innerHTML = '<p style="text-align: center; color: var(--text-secondary);">Select a streamer to view their badges.</p>';
+        return;
+      }
+      
+      content.innerHTML = '<div class="loading">Loading badges...</div>';
+      
+      try {
+        const resp = await fetch(`/dashboard/proxy/badges/0/${memberId}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({})
+        });
+        
+        if (!resp.ok) {
+          throw new Error('Failed to load badges');
+        }
+        
+        const badges = await resp.json();
+        renderMemberBadges(badges);
+      } catch (error) {
+        console.error('Error loading badges:', error);
+        content.innerHTML = '<p style="text-align: center; color: var(--text-secondary);">Error loading badges.</p>';
+      }
+    }
+
+    function renderMemberBadges(badges) {
+      const content = document.getElementById('badgesContent');
+      content.innerHTML = '';
+      
+      // Group badges by category
+      const categories = {
+        'beginner': [],
+        'streams': [],
+        'time': [],
+        'consistency': [],
+        'dedication': [],
+        'endurance': []
+      };
+      
+      Object.values(badges).forEach(badge => {
+        const category = badge.category || 'general';
+        if (categories[category]) {
+          categories[category].push(badge);
+        }
+      });
+      
+      // Render each category
+      Object.keys(categories).forEach(category => {
+        if (categories[category].length === 0) return;
+        
+        const categoryTitle = category.charAt(0).toUpperCase() + category.slice(1);
+        const categoryDiv = document.createElement('div');
+        categoryDiv.style.marginBottom = '30px';
+        categoryDiv.innerHTML = `<h3 style="color: var(--text-primary); margin-bottom: 15px;">${categoryTitle}</h3>`;
+        
+        const grid = document.createElement('div');
+        grid.className = 'badges-grid';
+        
+        categories[category].forEach(badge => {
+          const card = document.createElement('div');
+          card.className = 'badge-card' + (badge.earned ? ' earned' : ' locked');
+          card.title = badge.description;
+          
+          let progressHtml = '';
+          if (!badge.earned && badge.progress > 0) {
+            progressHtml = `
+              <div class="badge-progress">
+                <div class="badge-progress-bar">
+                  <div class="badge-progress-fill" style="width: ${badge.progress * 100}%"></div>
+                </div>
+                <div class="badge-progress-text">${Math.round(badge.progress * 100)}% Complete</div>
+              </div>
+            `;
+          }
+          
+          card.innerHTML = `
+            <div class="badge-emoji">${badge.emoji}</div>
+            <div class="badge-name">${badge.name}</div>
+            <div class="badge-description">${badge.description}</div>
+            ${badge.earned ? '<div style="color: var(--accent-green); font-weight: 600; margin-top: 8px;">✓ Earned</div>' : progressHtml}
+            <div class="badge-category">${categoryTitle}</div>
+          `;
+          
+          grid.appendChild(card);
+        });
+        
+        categoryDiv.appendChild(grid);
+        content.appendChild(categoryDiv);
       });
     }
 
