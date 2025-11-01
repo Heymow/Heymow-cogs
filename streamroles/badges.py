@@ -59,22 +59,26 @@ def _check_consecutive_days(sessions: list, required_days: int) -> Tuple[bool, i
     if not sessions:
         return False, 0
     
-    # Group sessions by day
+    # Group sessions by day (using formatted string for clarity)
     days_streamed = set()
     for s in sessions:
         start = s.get("start")
         if start:
-            day = time.gmtime(start).tm_yday + time.gmtime(start).tm_year * 1000
-            days_streamed.add(day)
+            tm = time.gmtime(start)
+            # Use formatted string: "YYYY-DDD" where DDD is day of year
+            day_key = f"{tm.tm_year}-{tm.tm_yday:03d}"
+            days_streamed.add(day_key)
     
     if not days_streamed:
         return False, 0
     
-    sorted_days = sorted(days_streamed)
+    # Convert back to comparable integers for streak calculation
+    sorted_days = sorted([int(d.replace("-", "")) for d in days_streamed])
     max_streak = 1
     current_streak = 1
     
     for i in range(1, len(sorted_days)):
+        # Check if consecutive (considering year boundary)
         if sorted_days[i] == sorted_days[i-1] + 1:
             current_streak += 1
             max_streak = max(max_streak, current_streak)

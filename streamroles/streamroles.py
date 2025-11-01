@@ -805,6 +805,7 @@ class StreamRoles(commands.Cog):
                 web.post("/dashboard/proxy/heatmap", self._proxy_handle_heatmap),
                 web.post("/dashboard/proxy/all_members", self._proxy_handle_all_members),
                 web.post("/dashboard/proxy/badges/{guild_id}/{member_id}", self._proxy_handle_badges),
+                web.post("/dashboard/proxy/badges_batch", self._proxy_handle_badges_batch),
                 web.post("/dashboard/proxy/achievements", self._proxy_handle_achievements),
                 web.post("/dashboard/proxy/schedule_predictor", self._proxy_handle_schedule_predictor),
                 web.post("/dashboard/proxy/audience_overlap", self._proxy_handle_audience_overlap),
@@ -1524,6 +1525,78 @@ class StreamRoles(commands.Cog):
         
         return web.json_response(achievements)
 
+    async def _proxy_handle_badges_batch(self, request: web.Request):
+        """
+        POST /dashboard/proxy/badges_batch
+        Returns badges for multiple members in a single request.
+        Payload: { member_ids: [id1, id2, ...] }
+        """
+        payload = {}
+        if request.content_length:
+            try:
+                payload = await request.json()
+            except Exception:
+                log.exception("Invalid JSON body for /dashboard/proxy/badges_batch")
+                payload = {}
+
+        # resolve guild
+        guild = None
+        if payload.get("guild_id"):
+            try:
+                guild = self.bot.get_guild(int(payload.get("guild_id")))
+            except Exception:
+                guild = None
+
+        if guild is None:
+            for g in self.bot.guilds:
+                try:
+                    fixed = await self.conf.guild(g).fixed_guild_id()
+                except Exception:
+                    fixed = None
+                if fixed:
+                    try:
+                        if int(fixed) == g.id:
+                            guild = g
+                            break
+                    except Exception:
+                        guild = g
+                        break
+
+        if not guild:
+            return web.Response(status=400, text="guild_id required or no fixed_guild_id configured")
+
+        token = await self.conf.guild(guild).api_token()
+        if not token:
+            return web.Response(status=403, text="No API token configured for this guild")
+
+        member_ids = payload.get("member_ids", [])
+        if not member_ids:
+            return web.Response(status=400, text="member_ids required")
+
+        # Fetch badges for all members
+        result = {}
+        for member_id in member_ids:
+            try:
+                member = guild.get_member(int(member_id))
+                if member:
+                    sessions = await self._get_member_sessions(member, guild)
+                    badges = calculate_member_badges(sessions)
+                    
+                    # Calculate summary
+                    earned = sum(1 for b in badges.values() if b["earned"])
+                    total = len(badges)
+                    
+                    result[str(member_id)] = {
+                        "earned": earned,
+                        "total": total,
+                        "badges": badges
+                    }
+            except Exception as e:
+                log.exception(f"Error fetching badges for member {member_id}: {e}")
+                continue
+
+        return web.json_response(result)
+
     async def _proxy_handle_schedule_predictor(self, request: web.Request):
         """
         POST /dashboard/proxy/schedule_predictor
@@ -1631,8 +1704,8 @@ class StreamRoles(commands.Cog):
         low_activity_slots = []
         for day in range(7):
             for hour in range(24):
-                # Prefer reasonable streaming hours (8am - 2am)
-                if 8 <= hour or hour <= 2:
+                # Prefer reasonable streaming hours (8am - 2am, which is 8-23 or 0-2)
+                if (8 <= hour <= 23) or (0 <= hour <= 2):
                     low_activity_slots.append({
                         "day": day,
                         "hour": hour,
@@ -1927,12 +2000,15 @@ class StreamRoles(commands.Cog):
         total_streams = 0
         total_time = 0
         active_members = []
+        member_sessions_cache = {}  # Cache sessions to avoid re-fetching
         
         now = int(time.time())
         recent_cutoff = now - (7 * 86400)  # Last 7 days
         
         for member in guild.members:
             sessions = await self._get_member_sessions(member, guild)
+            member_sessions_cache[member.id] = sessions  # Cache for later use
+            
             if cutoff:
                 filtered = [s for s in sessions if s.get("start", 0) >= cutoff]
             else:
@@ -1956,27 +2032,24 @@ class StreamRoles(commands.Cog):
         avg_time_per_member = total_time / total_streamers if total_streamers else 0
         active_member_pct = (len(active_members) / total_streamers * 100) if total_streamers else 0
         
-        # Calculate growth (compare with previous period)
+        # Calculate growth (compare with previous period) using cached sessions
+        prev_streamers = 0
+        prev_streams = 0
+        
         if period.endswith("d"):
             days = int(period[:-1])
             prev_cutoff = cutoff - (days * 86400)
             
-            prev_streamers = 0
-            prev_streams = 0
-            
-            for member in guild.members:
-                sessions = await self._get_member_sessions(member, guild)
+            # Use cached sessions from first loop
+            for member_id, sessions in member_sessions_cache.items():
                 prev_filtered = [s for s in sessions if prev_cutoff <= s.get("start", 0) < cutoff]
                 
                 if prev_filtered:
                     prev_streamers += 1
                     prev_streams += len(prev_filtered)
-            
-            streamer_growth = ((total_streamers - prev_streamers) / prev_streamers * 100) if prev_streamers else 0
-            stream_growth = ((total_streams - prev_streams) / prev_streams * 100) if prev_streams else 0
-        else:
-            streamer_growth = 0
-            stream_growth = 0
+        
+        streamer_growth = ((total_streamers - prev_streamers) / prev_streamers * 100) if prev_streamers else 0
+        stream_growth = ((total_streams - prev_streams) / prev_streams * 100) if prev_streams else 0
         
         # Calculate health score (0-100)
         # Factors: active member %, avg streams, consistency

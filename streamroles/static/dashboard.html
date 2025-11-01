@@ -1270,22 +1270,28 @@
         const data = await resp.json();
         cachedData.allMembers = data;
         
-        // Fetch badge counts for each streamer
+        // Fetch badge counts for top 20 streamers using batch endpoint
         const badgeCounts = {};
-        for (const streamer of data.slice(0, 20)) {  // Limit to top 20 for performance
+        if (data.length > 0) {
           try {
-            const badgeResp = await fetch(`/dashboard/proxy/badges/0/${streamer.member_id}`, {
+            const memberIds = data.slice(0, 20).map(s => s.member_id);
+            const badgeResp = await fetch('/dashboard/proxy/badges_batch', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({})
+              body: JSON.stringify({ member_ids: memberIds })
             });
             if (badgeResp.ok) {
-              const badges = await badgeResp.json();
-              const earned = Object.values(badges).filter(b => b.earned).length;
-              badgeCounts[streamer.member_id] = { earned, total: Object.keys(badges).length };
+              const batchData = await badgeResp.json();
+              // Convert to our format
+              Object.keys(batchData).forEach(memberId => {
+                badgeCounts[memberId] = {
+                  earned: batchData[memberId].earned,
+                  total: batchData[memberId].total
+                };
+              });
             }
           } catch (e) {
-            console.error('Error fetching badges for', streamer.display_name, e);
+            console.error('Error fetching badges in batch:', e);
           }
         }
         
