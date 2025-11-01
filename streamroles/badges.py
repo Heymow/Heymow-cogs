@@ -197,13 +197,19 @@ def check_100_hours(member_data: dict, guild_data: dict = None) -> Tuple[bool, f
     return total_seconds >= target_seconds, min(total_seconds / target_seconds, 1.0)
 
 
-def check_500_hours(member_data: dict, guild_data: dict = None) -> Tuple[bool, float]:
-    """500 hours streamed badge."""
+def check_300_hours(member_data: dict, guild_data: dict = None) -> Tuple[bool, float]:
+    """300 hours streamed badge."""
     sessions = member_data.get("sessions", [])
     total_seconds = _total_stream_time(sessions)
-    target_seconds = 500 * 3600
+    target_seconds = 300 * 3600
     return total_seconds >= target_seconds, min(total_seconds / target_seconds, 1.0)
 
+
+def check_2_day_streak(member_data: dict, guild_data: dict = None) -> Tuple[bool, float]:
+    """2 day streaming streak badge."""
+    sessions = member_data.get("sessions", [])
+    achieved, max_streak = _check_consecutive_days(sessions, 2)
+    return achieved, min(max_streak / 2.0, 1.0)
 
 def check_3_day_streak(member_data: dict, guild_data: dict = None) -> Tuple[bool, float]:
     """3 day streaming streak badge."""
@@ -211,19 +217,21 @@ def check_3_day_streak(member_data: dict, guild_data: dict = None) -> Tuple[bool
     achieved, max_streak = _check_consecutive_days(sessions, 3)
     return achieved, min(max_streak / 3.0, 1.0)
 
-
-def check_7_day_streak(member_data: dict, guild_data: dict = None) -> Tuple[bool, float]:
-    """7 day streaming streak badge."""
+def check_5_day_streak(member_data: dict, guild_data: dict = None) -> Tuple[bool, float]:
+    """5 day streaming streak badge."""
     sessions = member_data.get("sessions", [])
-    achieved, max_streak = _check_consecutive_days(sessions, 7)
-    return achieved, min(max_streak / 7.0, 1.0)
+    achieved, max_streak = _check_consecutive_days(sessions, 5)
+    return achieved, min(max_streak / 5.0, 1.0)
 
 
-def check_30_day_streak(member_data: dict, guild_data: dict = None) -> Tuple[bool, float]:
-    """30 day streaming streak badge."""
+
+
+
+def check_8_hours_week(member_data: dict, guild_data: dict = None) -> Tuple[bool, float]:
+    """8 hours in a week badge."""
     sessions = member_data.get("sessions", [])
-    achieved, max_streak = _check_consecutive_days(sessions, 30)
-    return achieved, min(max_streak / 30.0, 1.0)
+    achieved, max_hours = _check_weekly_hours(sessions, 8)
+    return achieved, min(max_hours / 8.0, 1.0)
 
 
 def check_15_hours_week(member_data: dict, guild_data: dict = None) -> Tuple[bool, float]:
@@ -233,25 +241,18 @@ def check_15_hours_week(member_data: dict, guild_data: dict = None) -> Tuple[boo
     return achieved, min(max_hours / 15.0, 1.0)
 
 
-def check_30_hours_week(member_data: dict, guild_data: dict = None) -> Tuple[bool, float]:
-    """30 hours in a week badge."""
+def check_40_hours_month(member_data: dict, guild_data: dict = None) -> Tuple[bool, float]:
+    """40 hours in a month badge."""
     sessions = member_data.get("sessions", [])
-    achieved, max_hours = _check_weekly_hours(sessions, 30)
-    return achieved, min(max_hours / 30.0, 1.0)
-
-
-def check_100_hours_month(member_data: dict, guild_data: dict = None) -> Tuple[bool, float]:
-    """100 hours in a month badge."""
-    sessions = member_data.get("sessions", [])
-    achieved, max_hours = _check_monthly_hours(sessions, 100)
-    return achieved, min(max_hours / 100.0, 1.0)
+    achieved, max_hours = _check_monthly_hours(sessions, 40)
+    return achieved, min(max_hours / 40.0, 1.0)
 
 
 def check_marathon_session(member_data: dict, guild_data: dict = None) -> Tuple[bool, float]:
-    """Marathon session (8+ hours) badge."""
+    """Marathon session (6+ hours) badge."""
     sessions = member_data.get("sessions", [])
     longest = _longest_stream(sessions)
-    target = 8 * 3600
+    target = 6 * 3600
     return longest >= target, min(longest / target, 1.0)
 
 
@@ -314,65 +315,65 @@ BADGES = [
         "time"
     ),
     BadgeDefinition(
-        "500_hours",
+        "300_hours",
         "Legendary Streamer",
-        "Stream for a total of 500 hours",
+        "Stream for a total of 300 hours",
         "🏆",
-        check_500_hours,
+        check_300_hours,
         "time"
     ),
     BadgeDefinition(
-        "3_day_streak",
+        "2_day_streak",
         "On a Roll",
-        "Stream for 3 consecutive days",
+        "Stream for 2 consecutive days",
         "🔥",
+        check_2_day_streak,
+        "consistency"
+    ),
+    BadgeDefinition(
+        "3_day_streak",
+        "Stream Warrior",
+        "Stream for 3 consecutive days",
+        "💪",
         check_3_day_streak,
         "consistency"
     ),
     BadgeDefinition(
-        "7_day_streak",
-        "Week Warrior",
-        "Stream for 7 consecutive days",
-        "💪",
-        check_7_day_streak,
+        "5_day_streak",
+        "Unstoppable",
+        "Stream for 5 consecutive days",
+        "⚡",
+        check_5_day_streak,
         "consistency"
     ),
     BadgeDefinition(
-        "30_day_streak",
-        "Unstoppable",
-        "Stream for 30 consecutive days",
-        "⚡",
-        check_30_day_streak,
-        "consistency"
+        "8_hours_week",
+        "Weekly Grind",
+        "Stream 8 hours in a single week",
+        "📅",
+        check_8_hours_week,
+        "dedication"
     ),
     BadgeDefinition(
         "15_hours_week",
-        "Weekly Grind",
+        "Week Warrior Pro",
         "Stream 15 hours in a single week",
-        "📅",
+        "💎",
         check_15_hours_week,
         "dedication"
     ),
     BadgeDefinition(
-        "30_hours_week",
-        "Week Warrior Pro",
-        "Stream 30 hours in a single week",
-        "💎",
-        check_30_hours_week,
-        "dedication"
-    ),
-    BadgeDefinition(
-        "100_hours_month",
+        "40_hours_month",
         "Monthly Champion",
-        "Stream 100 hours in a single month",
+        "Stream 40 hours in a single month",
         "👑",
-        check_100_hours_month,
+        check_40_hours_month,
         "dedication"
     ),
     BadgeDefinition(
         "marathon_session",
         "Marathon Runner",
-        "Complete a single stream of 8+ hours",
+        "Complete a single stream of 6+ hours",
         "🏃",
         check_marathon_session,
         "endurance"
@@ -428,50 +429,50 @@ ACHIEVEMENTS = [
     AchievementDefinition(
         "marathon_king",
         "Marathon King/Queen",
-        "Longest single stream session in the community (minimum 8 hours)",
+        "Longest single stream session in the community (minimum 1 hour)",
         "👑",
         calc_longest_stream,
-        8.0
+        1.0
     ),
     AchievementDefinition(
         "consistency_master",
         "Consistency Master",
-        "Longest streaming streak in the community (minimum 7 days)",
+        "Longest streaming streak in the community (minimum 2 days)",
         "🎯",
         calc_most_consistent,
-        7.0
+        2.0
     ),
     AchievementDefinition(
         "time_champion",
         "Time Champion",
-        "Most total hours streamed in the community (minimum 100 hours)",
+        "Most total hours streamed in the community (minimum 1 hour)",
         "⏱️",
         calc_total_hours,
-        100.0
+        1.0
     ),
     AchievementDefinition(
         "stream_champion",
         "Stream Champion",
-        "Most streams completed in the community (minimum 50 streams)",
+        "Most streams completed in the community (minimum 1 stream)",
         "🏅",
         calc_most_streams,
-        50.0
+        1.0
     ),
     AchievementDefinition(
         "weekly_legend",
         "Weekly Legend",
-        "Most hours in a single week in the community (minimum 30 hours)",
+        "Most hours in a single week in the community (minimum 1 hour)",
         "📆",
         calc_best_week,
-        30.0
+        1.0
     ),
     AchievementDefinition(
         "monthly_master",
         "Monthly Master",
-        "Most hours in a single month in the community (minimum 100 hours)",
+        "Most hours in a single month in the community (minimum 1 hour)",
         "📊",
         calc_best_month,
-        100.0
+        1.0
     ),
 ]
 

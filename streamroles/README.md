@@ -20,31 +20,31 @@ Members can earn badges by reaching various streaming milestones:
 - **10 Hour Club** ⏰ - Stream for 10 hours total
 - **50 Hour Club** ⌚ - Stream for 50 hours total
 - **Century Streamer** ⏳ - Stream for 100 hours total
-- **Legendary Streamer** 🏆 - Stream for 500 hours total
+- **Legendary Streamer** 🏆 - Stream for 300 hours total
 
 #### Consistency
-- **On a Roll** 🔥 - Stream for 3 consecutive days
-- **Week Warrior** 💪 - Stream for 7 consecutive days
-- **Unstoppable** ⚡ - Stream for 30 consecutive days
+- **On a Roll** 🔥 - Stream for 2 consecutive days
+- **Stream Warrior** 💪 - Stream for 3 consecutive days
+- **Unstoppable** ⚡ - Stream for 5 consecutive days
 
 #### Dedication
-- **Weekly Grind** 📅 - Stream 15 hours in a single week
-- **Week Warrior Pro** 💎 - Stream 30 hours in a single week
-- **Monthly Champion** 👑 - Stream 100 hours in a single month
+- **Weekly Grind** 📅 - Stream 8 hours in a single week
+- **Week Warrior Pro** 💎 - Stream 15 hours in a single week
+- **Monthly Champion** 👑 - Stream 40 hours in a single month
 
 #### Endurance
-- **Marathon Runner** 🏃 - Complete a single stream of 8+ hours
+- **Marathon Runner** 🏃 - Complete a single stream of 6+ hours
 
 ### 🏅 Achievement System (6 Achievements)
 
 Guild-wide competitive achievements awarded to the top performers:
 
-- **Marathon King/Queen** 👑 - Longest single stream session (min. 8 hours)
-- **Consistency Master** 🎯 - Longest streaming streak (min. 7 days)
-- **Time Champion** ⏱️ - Most total hours streamed (min. 100 hours)
-- **Stream Champion** 🏅 - Most streams completed (min. 50 streams)
-- **Weekly Legend** 📆 - Most hours in a single week (min. 30 hours)
-- **Monthly Master** 📊 - Most hours in a single month (min. 100 hours)
+- **Marathon King/Queen** 👑 - Longest single stream session (min. 1 hour)
+- **Consistency Master** 🎯 - Longest streaming streak (min. 2 days)
+- **Time Champion** ⏱️ - Most total hours streamed (min. 1 hour)
+- **Stream Champion** 🏅 - Most streams completed (min. 1 stream)
+- **Weekly Legend** 📆 - Most hours in a single week (min. 1 hour)
+- **Monthly Master** 📊 - Most hours in a single month (min. 1 hour)
 
 ### 📊 Advanced Analytics
 
@@ -74,6 +74,8 @@ Guild-wide competitive achievements awarded to the top performers:
 - **Automatic Role Assignment** - Assigns roles to members streaming on Twitch
 - **Stream Alerts** - Real-time notifications when community members go live
 - **Statistics Tracking** - Comprehensive session tracking with duration, games, and timestamps
+- **Twitch Channel Watching** - Monitor Discord channels for Twitch links and automatically track discovered channels
+- **Dual Detection Mode** - Detect streamers via Discord presence (streaming status) OR posted Twitch links
 - **Whitelist/Blacklist** - Fine-grained control over who receives the streamer role
 - **Game Filtering** - Optionally restrict to specific games
 - **Data Export** - Export streaming statistics to CSV
@@ -212,6 +214,27 @@ The cog includes a web dashboard accessible at `http://HOST:PORT/dashboard` (def
 
 - `[p]streamrole setapitoken <token>` - Set API token for guild
 - `[p]streamrole setfixedguild <guild_id>` - Set fixed guild ID
+
+### Twitch Channel Watching Commands
+
+The bot can watch Discord channels for Twitch links and automatically track discovered channels. This provides an alternative way to discover community streamers beyond Discord's streaming status.
+
+- `[p]streamrole twitch watch <channel>` - Start watching a channel for Twitch links
+- `[p]streamrole twitch unwatch <channel>` - Stop watching a channel
+- `[p]streamrole twitch listwatched` - List all watched channels
+- `[p]streamrole twitch scan <channel> [limit]` - Scan channel history for Twitch links (default: 100 messages, max: 1000)
+- `[p]streamrole twitch list` - List all tracked Twitch channels
+- `[p]streamrole twitch add <username>` - Manually add a Twitch channel to tracking
+- `[p]streamrole twitch remove <username>` - Remove a specific Twitch channel from tracking
+- `[p]streamrole twitch flush` - Remove all tracked Twitch channels (with confirmation)
+
+**Usage Example:**
+```
+[p]streamrole twitch watch #self-promo
+[p]streamrole twitch scan #self-promo 500
+```
+
+This will watch the #self-promo channel and scan the last 500 messages for Twitch links. Any Twitch channels found will be automatically tracked.
 
 ## API Endpoints
 
