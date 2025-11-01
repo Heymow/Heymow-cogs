@@ -1,0 +1,99 @@
+.streamers-tab {
+  padding: 20px 0;
+}
+
+.sort-controls {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+.sort-controls button {
+  flex: 1;
+  padding: 10px 15px;
+  background: rgba(29, 74, 48, 0.4);
+  color: var(--text-secondary);
+  border: 1px solid rgba(74, 124, 89, 0.3);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.3s;
+}
+
+.sort-controls button:hover {
+  background: rgba(29, 74, 48, 0.6);
+}
+
+.sort-controls button.active {
+  background: var(--accent-green);
+  color: var(--text-primary);
+}
+
+.streamers-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.streamer-card {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  padding: 15px;
+  background: rgba(29, 74, 48, 0.6);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(74, 124, 89, 0.3);
+  border-radius: 10px;
+  transition: all 0.3s;
+}
+
+.streamer-card:hover {
+  border-color: var(--accent-green);
+  transform: translateX(5px);
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+}
+
+.streamer-rank {
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: var(--accent-green);
+  min-width: 50px;
+  text-align: center;
+}
+
+.streamer-info {
+  flex: 1;
+}
+
+.streamer-name {
+  font-size: 1.1rem;
+  color: var(--text-primary);
+  margin-bottom: 5px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.role-tag {
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  text-transform: capitalize;
+}
+
+.role-tag.role-seed { background: var(--seed-color); }
+.role-tag.role-sprout { background: var(--sprout-color); }
+.role-tag.role-flower { background: var(--flower-color); color: #000; }
+.role-tag.role-rosegarden { background: var(--rosegarden-color); }
+.role-tag.role-eden { background: var(--eden-color); color: #000; }
+.role-tag.role-patrons { background: var(--patrons-color); }
+.role-tag.role-sponsor { background: var(--sponsor-color); }
+.role-tag.role-garden_guardian { background: var(--garden-guardian-color); }
+.role-tag.role-admin { background: var(--admin-color); }
+
+.streamer-stats {
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  display: flex;
+  gap: 8px;
+}

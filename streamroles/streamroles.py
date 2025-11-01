@@ -991,6 +991,8 @@ class StreamRoles(commands.Cog):
             [
                 web.get("/", self._handle_index),
                 web.get("/dashboard", self._handle_dashboard),
+                web.get("/dashboard/react", self._handle_react_dashboard),
+                web.static("/dashboard/react/assets", os.path.join(os.path.dirname(__file__), "static", "react-build", "assets")),
                 web.post("/dashboard/proxy/top", self._proxy_handle_top),
                 web.post("/dashboard/proxy/member/{guild_id}/{member_id}", self._proxy_handle_member),
                 web.post("/dashboard/proxy/export/{guild_id}/{member_id}", self._proxy_handle_export),
@@ -1111,6 +1113,21 @@ class StreamRoles(commands.Cog):
 </html>
 """
         return web.Response(text=html, content_type="text/html")
+
+    async def _handle_react_dashboard(self, request: web.Request):
+        """Serve the React-based dashboard."""
+        try:
+            base = os.path.dirname(__file__)
+            react_build_path = os.path.join(base, "static", "react-build", "index.html")
+            if os.path.exists(react_build_path):
+                return web.FileResponse(path=react_build_path)
+        except Exception:
+            pass
+        return web.Response(
+            text="React dashboard not built. Please run 'npm run build' in the react-dashboard directory.",
+            content_type="text/plain",
+            status=404
+        )
 
     async def _handle_member_stats(self, request: web.Request):
         guild_id = request.match_info.get("guild_id")

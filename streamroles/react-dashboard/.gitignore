@@ -1,0 +1,17 @@
+# React Dashboard
+node_modules/
+dist/
+.env
+.env.local
+.env.production.local
+.env.development.local
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.DS_Store
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
