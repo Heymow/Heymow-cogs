@@ -986,31 +986,52 @@ class StreamRoles(commands.Cog):
         if self._api_runner:
             return
         app = web.Application(middlewares=[self._make_local_only_middleware()])
+        
+        # Check for React build directory
+        react_build_dir = os.path.join(os.path.dirname(__file__), "static", "react-build")
+        assets_dir = os.path.join(react_build_dir, "assets")
+        react_ui_available = os.path.isdir(react_build_dir) and os.path.isdir(assets_dir)
+        
+        if not react_ui_available:
+            if not os.path.isdir(react_build_dir):
+                log.warning("React build directory not found at: %s", react_build_dir)
+            elif not os.path.isdir(assets_dir):
+                log.warning("React assets directory not found at: %s", assets_dir)
+            log.warning("React UI will not be available. Place the React build in streamroles/static/react-build to enable the UI.")
+        
+        # Build routes list
+        routes = [
+            web.get("/", self._handle_index),
+            web.get("/dashboard", self._handle_dashboard),
+            web.get("/dashboard/react", self._handle_react_dashboard),
+            web.post("/dashboard/proxy/top", self._proxy_handle_top),
+            web.post("/dashboard/proxy/member/{guild_id}/{member_id}", self._proxy_handle_member),
+            web.post("/dashboard/proxy/export/{guild_id}/{member_id}", self._proxy_handle_export),
+            web.post("/dashboard/proxy/heatmap", self._proxy_handle_heatmap),
+            web.post("/dashboard/proxy/all_members", self._proxy_handle_all_members),
+            web.post("/dashboard/proxy/badges/{guild_id}/{member_id}", self._proxy_handle_badges),
+            web.post("/dashboard/proxy/badges_batch", self._proxy_handle_badges_batch),
+            web.post("/dashboard/proxy/achievements", self._proxy_handle_achievements),
+            web.post("/dashboard/proxy/schedule_predictor", self._proxy_handle_schedule_predictor),
+            web.post("/dashboard/proxy/audience_overlap", self._proxy_handle_audience_overlap),
+            web.post("/dashboard/proxy/collaboration_matcher", self._proxy_handle_collaboration_matcher),
+            web.post("/dashboard/proxy/community_health", self._proxy_handle_community_health),
+            # Internal local-only API (blocked by middleware)
+            web.get("/api/guild/{guild_id}/member/{member_id}", self._handle_member_stats),
+            web.get("/api/guild/{guild_id}/top", self._handle_top),
+            web.get("/api/guild/{guild_id}/export/member/{member_id}", self._handle_export_csv),
+        ]
+        
+        # Only add static route if React build is available
+        if react_ui_available:
+            routes.insert(3, web.static("/dashboard/react/assets", assets_dir))
+            log.info("React UI assets mounted successfully")
+        else:
+            # Add fallback route to inform about missing UI
+            routes.insert(3, web.get("/streamroles/ui-missing", self._handle_ui_missing))
+        
         # Public dashboard + proxy routes (public)
-        app.add_routes(
-            [
-                web.get("/", self._handle_index),
-                web.get("/dashboard", self._handle_dashboard),
-                web.get("/dashboard/react", self._handle_react_dashboard),
-                web.static("/dashboard/react/assets", os.path.join(os.path.dirname(__file__), "static", "react-build", "assets")),
-                web.post("/dashboard/proxy/top", self._proxy_handle_top),
-                web.post("/dashboard/proxy/member/{guild_id}/{member_id}", self._proxy_handle_member),
-                web.post("/dashboard/proxy/export/{guild_id}/{member_id}", self._proxy_handle_export),
-                web.post("/dashboard/proxy/heatmap", self._proxy_handle_heatmap),
-                web.post("/dashboard/proxy/all_members", self._proxy_handle_all_members),
-                web.post("/dashboard/proxy/badges/{guild_id}/{member_id}", self._proxy_handle_badges),
-                web.post("/dashboard/proxy/badges_batch", self._proxy_handle_badges_batch),
-                web.post("/dashboard/proxy/achievements", self._proxy_handle_achievements),
-                web.post("/dashboard/proxy/schedule_predictor", self._proxy_handle_schedule_predictor),
-                web.post("/dashboard/proxy/audience_overlap", self._proxy_handle_audience_overlap),
-                web.post("/dashboard/proxy/collaboration_matcher", self._proxy_handle_collaboration_matcher),
-                web.post("/dashboard/proxy/community_health", self._proxy_handle_community_health),
-                # Internal local-only API (blocked by middleware)
-                web.get("/api/guild/{guild_id}/member/{member_id}", self._handle_member_stats),
-                web.get("/api/guild/{guild_id}/top", self._handle_top),
-                web.get("/api/guild/{guild_id}/export/member/{member_id}", self._handle_export_csv),
-            ]
-        )
+        app.add_routes(routes)
         runner = web.AppRunner(app)
         await runner.setup()
         site = web.TCPSite(runner, self._api_host, self._api_port)
@@ -1128,6 +1149,14 @@ class StreamRoles(commands.Cog):
             content_type="text/plain",
             status=404
         )
+
+    async def _handle_ui_missing(self, request: web.Request):
+        """Fallback handler when React UI build is not available."""
+        return web.json_response({
+            "error": "UI not available",
+            "message": "The React UI build is missing. Please build the React dashboard and place it in streamroles/static/react-build to enable the UI.",
+            "instructions": "Run 'npm run build' in the react-dashboard directory and copy the build output to streamroles/static/react-build/"
+        }, status=503)
 
     async def _handle_member_stats(self, request: web.Request):
         guild_id = request.match_info.get("guild_id")
